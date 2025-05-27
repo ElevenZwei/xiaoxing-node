@@ -1,8 +1,12 @@
 import Fastify from 'fastify';
 import { wsDemoPlugin } from './ws_demo';
+import { loginDemoPlugin } from './login_demo';
 
 const fastify = Fastify({ logger: true });
+
 fastify.register(wsDemoPlugin, { prefix: '/ws' });
+fastify.register(loginDemoPlugin, { prefix: '/login' });
+
 fastify.get('/', async () => {
   return { hello: 'world' };
 });

@@ -31,15 +31,39 @@ import { FastifyInstance } from "fastify";
  * 
  * 服务器回复的 JSON 会根据这个设备是否之前注册过有所不同，
  * 在 demo 里面我们全都当作注册过的简单回复。
- * 
+ * {
+ *  "websocket": {
+ *   "url": "ws://example.com/ws",
+ *   "token": <string>,
+ *  },
+ *  "server_time": {
+ *   "timestamp": 1700000000,
+ *   "timezone_offset": 28800
+ *  },
+ * }
  */
 
 
-async function loginPlugin(fastify: FastifyInstance, opts: any) {
-    fastify.post('/', async (request, reply) => {
-    });
+async function loginPlugin(fastify: FastifyInstance, _opts: any) {
+  fastify.post('/', async (request, reply) => {
+    reply.header('Content-Type', 'application/json');
+    // const body = request.body as any;
+    // skip body validation for demo purposes
+    // just reply with a fixed JSON object
+    const response = {
+      websocket: {
+        url: `ws://${request.hostname}:${request.port}/ws`,
+        token: "demo-token",
+      },
+      server_time: {
+        timestamp: Math.floor(Date.now() / 1000), // current time in seconds
+        timezone_offset: new Date().getTimezoneOffset() * 60, // offset in seconds
+      },
+    };
+    return response;
+  });
 }
 
 export {
-    loginPlugin as loginDemoPlugin,
+  loginPlugin as loginDemoPlugin,
 };
