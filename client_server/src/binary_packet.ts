@@ -126,16 +126,21 @@ export class BinaryObject {
   cursor: number;
   buf: Buffer;
 
-  constructor(bosid: bigint, type: BOType, size: number) {
-    this.bosid = bosid;
-    this.type = type;
-    this.size = size;
-    this.cursor = 0;
-
-    if (size !== BOSIZE_UNKNOWN) {
-      this.buf = Buffer.alloc(size);
+  constructor(bosidOrHeader: bigint | BinaryPacketHeader, type?: BOType, size?: number) {
+    if (bosidOrHeader instanceof BinaryPacketHeader) {
+      this.bosid = bosidOrHeader.bosid;
+      this.type = bosidOrHeader.type;
+      this.size = bosidOrHeader.size;
     } else {
-      this.buf = Buffer.alloc(64); // 初始容量设为 64，按需扩容
+      this.bosid = bosidOrHeader;
+      this.type = type!;
+      this.size = size!;
+    }
+    this.cursor = 0;
+    if (this.size !== BOSIZE_UNKNOWN) {
+      this.buf = Buffer.alloc(this.size);
+    } else {
+      this.buf = Buffer.alloc(64); // 初始容量
     }
   }
 
@@ -203,6 +208,16 @@ export class BinaryObject {
       }
       onDone(fullPath);
     });
+  }
+
+  toJSON() {
+    return {
+      bosid: this.bosid.toString(),
+      type: BOTypeToString(this.type),
+      size: this.size,
+      cursor: this.cursor,
+      // data: this.getData().toString('hex') // 或者其他格式
+    };
   }
 
   private static getExtension(type: BOType): string {

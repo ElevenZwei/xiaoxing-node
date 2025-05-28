@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { BinaryPacket, BinaryPacketHeader } from './binary_packet';
+import { BinaryObject, BinaryPacket, BinaryPacketHeader } from './binary_packet';
 
 async function wsPlugin(fastify: FastifyInstance, _opts: any) {
   fastify.register(import('@fastify/websocket'));
@@ -39,7 +39,8 @@ async function wsPlugin(fastify: FastifyInstance, _opts: any) {
 
 class DemoContext {
   machine_id: number;
-  bo_map: Map<bigint, BinaryPacket> = new Map();
+  bo_map: Map<bigint, BinaryObject> = new Map();
+  last_append_bosid: bigint = BigInt(0);
   constructor(machine_id: number) {
     this.machine_id = machine_id;
   }
@@ -68,8 +69,26 @@ function wsMessageHandler(socket: WebSocket, message: string) {
 function wsBinaryHandler(socket: WebSocket, message: Buffer) {
   console.log('Received binary message:', message);
   // Here you can handle binary messages, e.g., audio data
-  // For demo purposes, we just echo it back
-  // socket.send(message);
+  const context = wsContextMap.get(socket);
+  if (!context) {
+    console.error('No context found for this socket');
+    return;
+  }
+  // Parse the binary message into a BinaryPacket
+  const packet = BinaryPacket.fromBuffer(message);
+  console.log('Parsed BinaryPacket Header:', packet.header.toJSON());
+  // Store the packet in the context's map
+  if (packet.header.bosid !== context.last_append_bosid) {
+    context.last_append_bosid = packet.header.bosid;
+    console.log('New BinaryObject started with bosid:', packet.header.bosid);
+  }
+  const obj = new BinaryObject(packet.header);
+  obj.appendData(packet.data);
+  context.bo_map.set(packet.header.bosid, obj);
+  if (packet.header.isLastFrame) {
+    obj.stopAppending();
+    console.log('Received complete BinaryObject:', obj.toJSON());
+  }
 }
 
 function wsErrorHandler(socket: WebSocket, error: Error) {
@@ -132,9 +151,49 @@ function handleClientListen(socket: WebSocket, json: any) {
   if (state == 'stop') {
     console.log('Client stopped listening');
     // TODO: Here you can process the accumulated binary data
+    const last_bosid = context.last_append_bosid;
+    if (last_bosid === BigInt(0)) {
+      console.error('No BinaryObject data to process');
+      return;
+    }
+    const last_obj = context.bo_map.get(last_bosid);
+    if (!last_obj) {
+      console.error('No BinaryObject found for last bosid:', last_bosid);
+      return;
+    }
+    console.log('Processing last BinaryObject:', last_obj.toJSON());
+    // Here you can save the BinaryObject to a file or process it further
+    last_obj.saveToFile('./data', `demo_${context.machine_id}_${last_bosid.toString()}`, (fullPath) => {
+      console.log(`Saved BinaryObject to ${fullPath}`);
+    });
+    context.bo_map.delete(last_bosid);
+    context.last_append_bosid = BigInt(0); // Reset last bosid
+    // demo sentence
+    sendSentence(socket, '这是一个测试句子。');
     return;
   }
 }
+
+/**
+ * 发送给客户端句子
+ * @param socket WebSocket
+ * @param sentence string
+ * 发送给客户端句子的 JSON 格式如下
+ * {
+ *  "type": "tts",
+ *  "state": "sentence_start",
+ *  "text": <string>,
+ *  }
+ */
+function sendSentence(socket: WebSocket, sentence: string) {
+  const response = {
+    type: 'tts',
+    state: 'sentence_start',
+    text: sentence,
+  };
+  socket.send(JSON.stringify(response));
+}
+
 
 export {
     wsPlugin as wsDemoPlugin,
