@@ -12,29 +12,32 @@ async function wsPlugin(fastify: FastifyInstance, _opts: any) {
       console.log('WebSocket connection closed');
     });
   });
-  fastify.route({
-    method: 'GET',
-    url: '/',
-    wsHandler: (connection, _req) => {
-      connection.socket.on('message', (message: string | Buffer, isBinary: boolean) => {
-        // Handle incoming WebSocket messages
-        if (isBinary) {
-          wsBinaryHandler(connection.socket, message as Buffer);
-        } else {
-          wsMessageHandler(connection.socket, message as string);
-        }
-      });
-      connection.socket.on('close', () => {
-        console.log('WebSocket connection closed');
-      });
-      connection.socket.on('error', (error: Error) => {
-        wsErrorHandler(connection.socket, error);
-      });
-    },
-    handler: (_request, _reply) => {
-      return { message: 'WebSocket endpoint is ready. Connect to /ws/echo' };
-    },
+  fastify.get('/', { websocket: true }, (connection, _req) => {
+    connection.socket.on('message', (message: string | Buffer, isBinary: boolean) => {
+      // Handle incoming WebSocket messages
+      if (isBinary) {
+        wsBinaryHandler(connection.socket, message as Buffer);
+      } else {
+        wsMessageHandler(connection.socket, message as string);
+      }
+    });
+    connection.socket.on('close', () => {
+      console.log('WebSocket connection closed');
+    });
+    connection.socket.on('error', (error: Error) => {
+      wsErrorHandler(connection.socket, error);
+    });
   });
+
+  // Uncomment the following lines if you want to have a non-WebSocket endpoint
+  // fastify.route({
+  //   method: 'GET',
+  //   url: '/',
+  //   wsHandler: (connection, _req) => {},
+  //   handler: (_request, _reply) => {
+  //     return { message: 'WebSocket endpoint is ready. Connect to /ws' };
+  //   },
+  // });
 }
 
 class DemoContext {
@@ -85,10 +88,10 @@ function wsBinaryHandler(socket: WebSocket, message: Buffer) {
   if (!obj) {
     obj = new BinaryObject();
     obj.fromHeader(packet.header);
+    context.bo_map.set(packet.header.bosid, obj);
     console.log('New BinaryObject started with bosid:', obj.bosid);
   }
   obj.appendData(packet.data);
-  context.bo_map.set(packet.header.bosid, obj);
   if (packet.header.isLastFrame) {
     obj.stopAppending();
     console.log('Received complete BinaryObject:', obj.toJSON());
