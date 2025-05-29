@@ -1,4 +1,4 @@
-import { FastifyInstance } from "fastify";
+import { Router } from 'express';
 
 /**
  * 这个 login 是一个硬件报告自己编号和版本号的接口。
@@ -43,27 +43,21 @@ import { FastifyInstance } from "fastify";
  * }
  */
 
+export const loginDemoRouter = Router();
 
-async function loginPlugin(fastify: FastifyInstance, _opts: any) {
-  fastify.post('/', async (request, reply) => {
-    reply.header('Content-Type', 'application/json');
-    // const body = request.body as any;
-    // skip body validation for demo purposes
-    // just reply with a fixed JSON object
-    const response = {
-      websocket: {
-        url: `ws://${request.hostname}:${request.port}/ws`,
-        token: "demo-token",
-      },
-      server_time: {
-        timestamp: Math.floor(Date.now() / 1000), // current time in seconds
-        timezone_offset: new Date().getTimezoneOffset() * 60, // offset in seconds
-      },
-    };
-    return response;
-  });
-}
-
-export {
-  loginPlugin as loginDemoPlugin,
-};
+loginDemoRouter.post('/', (request, reply) => {
+  // const body = request.body as any;
+  // skip body validation for demo purposes
+  // just reply with a fixed JSON object
+  const response = {
+    websocket: {
+      url: `ws://${request.hostname}:${request.socket.localPort}/ws`,
+      token: "demo-token",
+    },
+    server_time: {
+      timestamp: Math.floor(Date.now() / 1000), // current time in seconds
+      timezone_offset: new Date().getTimezoneOffset() * 60, // offset in seconds
+    },
+  };
+  reply.json(response);
+});

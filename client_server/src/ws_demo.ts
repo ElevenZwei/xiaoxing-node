@@ -1,63 +1,59 @@
-import { FastifyInstance } from 'fastify';
-import { WebSocket } from '@fastify/websocket';
+import { WebSocket, RawData, WebSocketServer } from 'ws';
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
 
-async function wsPlugin(fastify: FastifyInstance, _opts: any) {
-  fastify.get('/echo', { websocket: true }, (connection, _req) => {
-    const socket = connection.socket as WebSocket;
-    socket.on('message', (message: string) => {
-      console.log('Received message:', message);
-      socket.send(`Echo: ${message}`);
-    });
-    socket.on('close', () => {
-      console.log('WebSocket connection closed');
-    });
+export function wsEchoHandler(wss: WebSocketServer) {
+  wss.on('connection', (socket: WebSocket) => {
+    handleEchoConnection(socket);
   });
-  fastify.get('/', { websocket: true }, (connection, _req) => {
-    const socket = connection.socket as WebSocket;
-    socket.on('message', (message: string | Buffer, isBinary: boolean) => {
-      // Handle incoming WebSocket messages
-      if (isBinary) {
-        wsBinaryHandler(socket, message as Buffer);
-      } else {
-        wsMessageHandler(socket, message as string);
-      }
-    });
-    socket.on('close', () => {
-      console.log('WebSocket connection closed');
-    });
-    socket.on('error', (error: Error) => {
-      wsErrorHandler(socket, error);
-    });
-  });
-
-
-function handleEchoConnection(socket: WebSocket) {
-    console.log('WebSocket connection established');
-    if (!(socket instanceof WebSocket)) {
-      console.error('Connection is not a WebSocket instance');
-      return;
-    }
-    socket.on('message', (message: RawData, isBinary: boolean) => {
-      if (isBinary) {
-        // Handle binary messages if needed
-        console.log('Received binary message:', message);
-      } else {
-        // Handle text messages
-        console.log('Received message:', message);
-        socket.send(`Echo: ${message}`);
-      }
-    });
-
-    socket.on('close', () => {
-      console.log('WebSocket connection closed');
-    });
-
-    socket.on('error', (error: Error) => {
-      console.error('WebSocket error:', error);
-    });
 }
 
+function handleEchoConnection(socket: WebSocket) {
+  console.log('WebSocket echo connection established');
+  if (!(socket instanceof WebSocket)) {
+    console.error('Connection is not a WebSocket instance');
+    return;
+  }
+  socket.on('message', (message: RawData, isBinary: boolean) => {
+    if (isBinary) {
+      // Handle binary messages if needed
+      console.log('Received binary message:', message);
+    } else {
+      // Handle text messages
+      console.log('Received message:', message);
+      socket.send(`Echo: ${message}`);
+    }
+  });
+  socket.on('close', () => {
+    console.log('WebSocket connection closed');
+  });
+  socket.on('error', (error: Error) => {
+    console.error('WebSocket error:', error);
+  });
+}
+
+export function wsDemoHandler(wss: WebSocketServer) {
+  wss.on('connection', (socket: WebSocket) => {
+    handleDemoConnection(socket);
+  });
+}
+
+function handleDemoConnection(socket: WebSocket) {
+  console.log('WebSocket demo connection established');
+  socket.on('message', (message: RawData, isBinary: boolean) => {
+    if (isBinary) {
+      wsBinaryHandler(socket, message as Buffer);
+    } else {
+      const msg = message.toLocaleString();
+      wsMessageHandler(socket, msg);
+    }
+  });
+  socket.on('close', () => {
+    console.log('WebSocket connection closed');
+  });
+  socket.on('error', (error: Error) => {
+    wsErrorHandler(socket, error);
+  });
+}
 
 class DemoContext {
   machine_id: number;
@@ -258,8 +254,4 @@ function sendImage(socket: WebSocket, imageData: Buffer) {
         ", frame_size:", packet.header.frameSize);
     socket.send(buffer);
   });
-}
-
-export {
-    wsPlugin as wsDemoPlugin,
 }

@@ -1,26 +1,29 @@
-import Fastify from 'fastify';
-import { wsDemoPlugin } from './ws_demo';
-import { loginDemoPlugin } from './login_demo';
+import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
+import { wsDemoHandler } from './ws_demo';
+import { loginDemoRouter } from './login_demo';
 
-const fastify = Fastify({ logger: true });
-fastify.register(import('@fastify/websocket'));
-fastify.register(wsDemoPlugin, { prefix: '/ws' });
-fastify.register(loginDemoPlugin, { prefix: '/login' });
+const app = express();
+const server = http.createServer(app);
 
-fastify.get('/', async () => {
-  return { hello: 'world' };
+// 普通 HTTP 路由
+app.get('/', (_req, res) => {
+  res.json({ hello: 'world' });
 });
 
+// 设置路由
+app.use('/login', loginDemoRouter); // 替代 fastify.register(loginDemoPlugin, { prefix: '/login' })
+// app.use('/ws', wsDemoRouter);       // 提供 WebSocket 路由描述（可选）
+
+const wss = new WebSocketServer({server, path: '/ws'});
+wsDemoHandler(wss);
+
+// 启动监听
 const localhost = true;
 const host = localhost ? '127.0.0.1' : '0.0.0.0';
 const port = 3000;
-const start = async () => {
-  try {
-    await fastify.listen({ port, host });
-    console.log(`Server listening on http://${host}:${port}`);
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
-};
-start();
+
+server.listen(port, host, () => {
+  console.log(`Server listening on http://${host}:${port}`);
+});
