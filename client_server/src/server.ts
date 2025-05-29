@@ -3,7 +3,7 @@ import { wsDemoPlugin } from './ws_demo';
 import { loginDemoPlugin } from './login_demo';
 
 const fastify = Fastify({ logger: true });
-
+fastify.register(import('@fastify/websocket'));
 fastify.register(wsDemoPlugin, { prefix: '/ws' });
 fastify.register(loginDemoPlugin, { prefix: '/login' });
 

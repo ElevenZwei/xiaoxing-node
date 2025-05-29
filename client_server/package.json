@@ -7,12 +7,19 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@fastify/websocket": "^11.0.2",
-    "fastify": "^5.3.3"
+    "@fastify/websocket": "^11.1.0",
+    "express": "^5.1.0",
+    "fastify": "^5.3.3",
+    "ws": "^8.18.2"
   },
   "devDependencies": {
+    "@types/express": "^5",
     "@types/node": "^22.15.21",
+    "@types/ws": "^8.18.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
+  },
+  "installConfig": {
+    "pnp": false
   }
 }
