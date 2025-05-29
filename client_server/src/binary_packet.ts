@@ -35,6 +35,26 @@ export function BOTypeFromString(name: string): BOType | undefined {
   }
 }
 
+export class Snowflake {
+  machineId = 1n; // 机器 ID，假设为 1
+  lastTimestamp = 0n; // 上次生成 ID 的时间戳
+  lastSequence = 0n; // 序列号，初始为 0
+
+  constructor(machineId: number) {
+    this.machineId = BigInt(machineId);
+  }
+  /** 生成一个新的 Snowflake ID */
+  generate(): bigint {
+    let now = BigInt(Date.now());
+    if (now <= this.lastTimestamp) {
+      now = this.lastTimestamp + 1n; // 确保时间戳递增
+    }
+    this.lastTimestamp = now;
+    this.lastSequence = (this.lastSequence + 1n) & 0xFFFn; // 序列号循环，最大值为 4095
+    return (now << 22n) | (this.machineId << 12n) | this.lastSequence;
+  }
+}
+
 export class BinaryPacketHeader {
   bosid: bigint = 0n;        // 8 bytes
   size: number = 0;          // 4 bytes
@@ -120,27 +140,47 @@ export class BinaryPacket {
 };
 
 export class BinaryObject {
-  bosid: bigint;
-  type: BOType;
-  size: number;
-  cursor: number;
-  buf: Buffer;
+  bosid: bigint = 0n;
+  type: BOType = BOType.RawText; // 默认类型为 RawText
+  size: number = 0;
+  cursor: number = 0;
+  buf: Buffer = Buffer.alloc(0); // 初始为空 Buffer
 
-  constructor(bosidOrHeader: bigint | BinaryPacketHeader, type?: BOType, size?: number) {
-    if (bosidOrHeader instanceof BinaryPacketHeader) {
-      this.bosid = bosidOrHeader.bosid;
-      this.type = bosidOrHeader.type;
-      this.size = bosidOrHeader.size;
-    } else {
-      this.bosid = bosidOrHeader;
-      this.type = type!;
-      this.size = size!;
+  fromHeader(header: BinaryPacketHeader): void {
+    this.bosid = header.bosid;
+    this.type = header.type;
+    this.size = header.size;
+    this.init_alloc();
+  }
+
+  fromProps(bosid: bigint, type: BOType, size: number): void {
+    this.bosid = bosid;
+    this.type = type;
+    this.size = size;
+    this.init_alloc();
+  }
+
+  async fromFile(bosid: bigint, type: BOType, filePath: string): Promise<void> {
+    this.bosid = bosid;
+    this.type = type;
+    // read file returns a Promise
+    try {
+      const fileBuffer = await fs.promises.readFile(filePath);
+      this.size = fileBuffer.length;
+      this.init_alloc();
+      this.appendData(fileBuffer);
+    } catch (err) {
+      console.error(`Failed to read file ${filePath}:`, err);
+      throw err; // 重新抛出错误以便调用者处理
     }
-    this.cursor = 0;
-    if (this.size !== BOSIZE_UNKNOWN) {
-      this.buf = Buffer.alloc(this.size);
+  }
+
+  private init_alloc(): void {
+    // 如果 size 是未知的，使用一个初始容量
+    if (this.size === BOSIZE_UNKNOWN) {
+      this.buf = Buffer.alloc(64);
     } else {
-      this.buf = Buffer.alloc(64); // 初始容量
+      this.buf = Buffer.alloc(this.size);
     }
   }
 
@@ -150,7 +190,7 @@ export class BinaryObject {
 
     // 自动扩容逻辑（类似 std::vector）
     if (requiredSize > this.buf.length) {
-      let newCapacity = this.buf.length;
+      let newCapacity = Math.max(this.buf.length, 64); // 最小扩容为 64 字节
       while (newCapacity < requiredSize) {
         newCapacity *= 2;
       }
@@ -218,6 +258,33 @@ export class BinaryObject {
       cursor: this.cursor,
       // data: this.getData().toString('hex') // 或者其他格式
     };
+  }
+  
+  toBinaryPackets(maxFramePayloadSize: number): BinaryPacket[] {
+    if (this.size === BOSIZE_UNKNOWN) {
+      throw new Error("Cannot create BinaryPackets from BinaryObject with unknown size");
+    }
+    const packets: BinaryPacket[] = [];
+    let offset = 0;
+    while (offset < this.size) {
+      const frameSize = Math.min(maxFramePayloadSize, this.size - offset);
+      const isLastFrame = (offset + frameSize >= this.size) ? 1 : 0;
+      
+      const header = new BinaryPacketHeader();
+      header.bosid = this.bosid;
+      header.size = this.size;
+      header.offset = offset;
+      header.frameSize = frameSize;
+      header.isLastFrame = isLastFrame;
+      header.type = this.type;
+      // 创建数据部分
+      const data = this.buf.subarray(offset, offset + frameSize);
+      const packet = new BinaryPacket(header, data);
+      packets.push(packet);
+
+      offset += frameSize;
+    }
+    return packets;
   }
 
   private static getExtension(type: BOType): string {

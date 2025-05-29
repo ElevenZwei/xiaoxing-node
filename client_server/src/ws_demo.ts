@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { BinaryObject, BinaryPacket, BinaryPacketHeader } from './binary_packet';
+import { BinaryObject, BinaryPacket, BinaryPacketHeader, BOType, Snowflake } from './binary_packet';
 
 async function wsPlugin(fastify: FastifyInstance, _opts: any) {
   fastify.register(import('@fastify/websocket'));
@@ -80,9 +80,13 @@ function wsBinaryHandler(socket: WebSocket, message: Buffer) {
   // Store the packet in the context's map
   if (packet.header.bosid !== context.last_append_bosid) {
     context.last_append_bosid = packet.header.bosid;
-    console.log('New BinaryObject started with bosid:', packet.header.bosid);
   }
-  const obj = new BinaryObject(packet.header);
+  let obj = context.bo_map.get(packet.header.bosid);
+  if (!obj) {
+    obj = new BinaryObject();
+    obj.fromHeader(packet.header);
+    console.log('New BinaryObject started with bosid:', obj.bosid);
+  }
   obj.appendData(packet.data);
   context.bo_map.set(packet.header.bosid, obj);
   if (packet.header.isLastFrame) {
@@ -175,7 +179,7 @@ function handleClientListen(socket: WebSocket, json: any) {
 }
 
 /**
- * 发送给客户端句子
+ * 发送句子给客户端
  * @param socket WebSocket
  * @param sentence string
  * 发送给客户端句子的 JSON 格式如下
@@ -194,6 +198,45 @@ function sendSentence(socket: WebSocket, sentence: string) {
   socket.send(JSON.stringify(response));
 }
 
+const id_gen = new Snowflake(0x24);
+function generateBOSID(): bigint {
+  return id_gen.generate();
+}
+
+/**
+ * 发送图片给客户端
+ * @param socket WebSocket
+ * @param imageData Buffer
+ * 发送给客户端图片的 JSON 格式如下
+ * { "type": "image", "bosid": <bigint> }
+ * 其中 bosid 是一个唯一的 ID，用于标识这张图片。
+ * 然后是许多个 BinaryPacket 数据包。
+ * 数据包是 BinaryObject buffer 载入图片数据之后，切分出来的。
+ */
+function sendImage(socket: WebSocket, imageData: Buffer) {
+  const bosid = generateBOSID();
+  const response = {
+    type: 'image',
+    bosid: bosid.toString(),
+  };
+  socket.send(JSON.stringify(response));
+
+  // Create a BinaryObject and append the image data
+  const obj = new BinaryObject();
+  obj.fromProps(bosid, BOType.ImageJpeg, imageData.length);
+  obj.appendData(imageData);
+  obj.stopAppending(); // Mark the object as complete
+  console.log('Sending image with bosid:', bosid.toString(), ", size:", obj.size);
+  // Send the BinaryObject as multiple BinaryPackets
+  const packetSize = 1800; // Example packet size
+  obj.toBinaryPackets(packetSize).forEach(packet => {
+    const buffer = packet.toBuffer();
+    console.log('Sending BinaryPacket with bosid:', packet.header.bosid.toString(), 
+        ", offset:", packet.header.offset,
+        ", frame_size:", packet.header.frameSize);
+    socket.send(buffer);
+  });
+}
 
 export {
     wsPlugin as wsDemoPlugin,
