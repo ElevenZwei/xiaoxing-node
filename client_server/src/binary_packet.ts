@@ -53,6 +53,21 @@ export class Snowflake {
     this.lastSequence = (this.lastSequence + 1n) & 0xFFFn; // 序列号循环，最大值为 4095
     return (now << 22n) | (this.machineId << 12n) | this.lastSequence;
   }
+
+  static parse(id: bigint): { timestamp: bigint, machineId: bigint, sequence: bigint } {
+    const timestamp = id >> 22n;
+    const machineId = (id >> 12n) & 0x3FFn; // 假设机器 ID 占 10 位
+    const sequence = id & 0xFFFn; // 序列号占 12 位
+    return { timestamp, machineId, sequence };
+  }
+  static parseToReadable(id: bigint): { timestamp: Date, machineId: bigint, sequence: bigint } {
+    const parsed = Snowflake.parse(id);
+    return {
+      timestamp: new Date(Number(parsed.timestamp)),
+      machineId: parsed.machineId,
+      sequence: parsed.sequence
+    };
+  }
 }
 
 export class BinaryPacketHeader {
@@ -99,6 +114,7 @@ export class BinaryPacketHeader {
   toJSON() {
     return {
       bosid: this.bosid.toString(),
+      bosid_meaning: Snowflake.parseToReadable(this.bosid),
       size: this.size,
       offset: this.offset,
       frameSize: this.frameSize,
@@ -253,6 +269,7 @@ export class BinaryObject {
   toJSON() {
     return {
       bosid: this.bosid.toString(),
+      bosid_meaning: Snowflake.parseToReadable(this.bosid),
       type: BOTypeToString(this.type),
       size: this.size,
       cursor: this.cursor,

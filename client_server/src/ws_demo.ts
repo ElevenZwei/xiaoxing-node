@@ -137,6 +137,8 @@ function handleClientHello(socket: WebSocket, json: any) {
       frame_duration: 60, // 60 ms
     },
   }
+  // log
+  console.log('Sending hello response:', response);
   socket.send(JSON.stringify(response));
 }
 
@@ -172,7 +174,7 @@ function handleClientListen(socket: WebSocket, json: any) {
   }
   if (state == 'stop') {
     console.log('Client stopped listening');
-    // TODO: Here you can process the accumulated binary data
+    // Here you can process the accumulated binary data
     const last_bosid = context.last_append_bosid;
     if (last_bosid === BigInt(0)) {
       console.error('No BinaryObject data to process');
@@ -183,13 +185,26 @@ function handleClientListen(socket: WebSocket, json: any) {
       console.error('No BinaryObject found for last bosid:', last_bosid);
       return;
     }
+    last_obj.stopAppending();
     console.log('Processing last BinaryObject:', last_obj.toJSON());
+    // filter size > 100MB
+    if (last_obj.size > 100 * 1024 * 1024) { // 100MB
+      console.error('BinaryObject size exceeds 100MB:', last_obj.size / 1024 / 1024, 'MB');
+      return;
+    }
     // Here you can save the BinaryObject to a file or process it further
     last_obj.saveToFile('./data', `demo_${context.machine_id}_${last_bosid.toString()}`, (fullPath) => {
       console.log(`Saved BinaryObject to ${fullPath}`);
     });
-    context.bo_map.delete(last_bosid);
-    context.last_append_bosid = BigInt(0); // Reset last bosid
+    // delete after half second.
+    // 这是一个临时的解决方案，有时候有的数据包会在 stop 之后才到达。
+    // 因为这是音频数据，所以我们假设最后的数据包可以忽略。
+    // 真实场景里面可能需要一个统计，确定是不重要的音频数据再丢弃。
+    setTimeout(() => {
+      context.bo_map.delete(last_bosid);
+      context.last_append_bosid = BigInt(0); // Reset last bosid
+      console.log(`Deleted BinaryObject with bosid: ${last_bosid.toString()} from map`);
+    }, 500);
     // demo sentence
     sendSentence(socket, '这是一个测试句子。');
     return;
