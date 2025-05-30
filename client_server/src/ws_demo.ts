@@ -132,7 +132,11 @@ function handleClientHello(socket: WebSocket, json: any) {
     use_binary_packet: true,
     audio_params: {
       format: 'opus',
-      sample_rate: 16000,
+      // 24kHz，表示服务器传给客户端的音频数据是 24kHz 的采样率
+      // 这个数字最好和客户端的 AUDIO_OUTPUT_SAMPLE_RATE 一致。
+      // 采样率是 24000Hz，单声道，帧长 60ms。
+      // 60ms 的帧长，表示每个音频包的大小是 24000 * 0.06 = 1440 字节。
+      sample_rate: 24000,
       channels: 1,
       frame_duration: 60, // 60 ms
     },
