@@ -49,9 +49,13 @@ loginDemoRouter.post('/', (request, reply) => {
   // const body = request.body as any;
   // skip body validation for demo purposes
   // just reply with a fixed JSON object
+  const host = request.headers.host || 'localhost';
+  // parse port from host if available
+  const portMatch = host.match(/:(\d+)$/);
+  const port = portMatch ? portMatch[1] : '80'; // default to 80 if no port is specified
   const response = {
     websocket: {
-      url: `ws://${request.hostname}:${request.socket.localPort}/ws`,
+      url: `ws://${request.hostname}:${port}/ws`,
       token: "demo-token",
     },
     server_time: {
