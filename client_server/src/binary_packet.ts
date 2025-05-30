@@ -36,6 +36,7 @@ export function BOTypeFromString(name: string): BOType | undefined {
 }
 
 export class Snowflake {
+  static readonly EPOCH_FROM = BigInt(1609459200000); // 2021-01-01T00:00:00Z 的时间戳
   machineId = 1n; // 机器 ID，假设为 1
   lastTimestamp = 0n; // 上次生成 ID 的时间戳
   lastSequence = 0n; // 序列号，初始为 0
@@ -45,17 +46,26 @@ export class Snowflake {
   }
   /** 生成一个新的 Snowflake ID */
   generate(): bigint {
-    let now = BigInt(Date.now());
-    if (now <= this.lastTimestamp) {
-      now = this.lastTimestamp + 1n; // 确保时间戳递增
+    let now = BigInt(Date.now()) - Snowflake.EPOCH_FROM; // 获取当前时间戳，减去 EPOCH_FROM 以适应 Snowflake 格式
+    if (now < this.lastTimestamp) {
+      now = this.lastTimestamp; // 如果当前时间戳小于上次生成的时间戳，保持不变
+    }
+    if (now === this.lastTimestamp) {
+      this.lastSequence = (this.lastSequence + 1n) & 0xFFFn; // 序列号循环，最大值为 4095
+      if (this.lastSequence === 0n) {
+        // 如果序列号回绕到 0，进位下一毫秒
+        now += 1n;
+      }
+    } else {
+      this.lastSequence = 0n; // 如果时间戳变化，重置序列号
     }
     this.lastTimestamp = now;
-    this.lastSequence = (this.lastSequence + 1n) & 0xFFFn; // 序列号循环，最大值为 4095
+    // 生成 Snowflake ID：timestamp (22 bits) + machineId (10 bits) + sequence (12 bits)
     return (now << 22n) | (this.machineId << 12n) | this.lastSequence;
   }
 
   static parse(id: bigint): { timestamp: bigint, machineId: bigint, sequence: bigint } {
-    const timestamp = id >> 22n;
+    const timestamp = id >> 22n + Snowflake.EPOCH_FROM; // 获取时间戳并加上 EPOCH_FROM
     const machineId = (id >> 12n) & 0x3FFn; // 假设机器 ID 占 10 位
     const sequence = id & 0xFFFn; // 序列号占 12 位
     return { timestamp, machineId, sequence };
