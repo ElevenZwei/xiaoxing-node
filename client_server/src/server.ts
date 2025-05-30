@@ -23,7 +23,7 @@ const wss = new WebSocketServer({server, path: '/ws'});
 wsDemoHandler(wss);
 
 // 创建数据文件夹
-const dataDir = path.join(__dirname, 'data');
+const dataDir = path.join(__dirname, '../data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
   console.log(`Data directory created at ${dataDir}`);
