@@ -212,6 +212,12 @@ export class BinaryObject {
 
   /** 向 buffer 添加数据，自动扩容 */
   appendData(data: Buffer): void {
+    if (this.size != BOSIZE_UNKNOWN && this.cursor >= this.size && data.length > 0) {
+      // 有些时候 Stop 会比最后两帧数据来得更早，这种时候通常是音频数据，我选择放弃最后的结尾数据。
+      console.warn(`Cannot append to a completed file, size: ${this.size}`);
+      return;
+    }
+
     const requiredSize = this.cursor + data.length;
 
     // 自动扩容逻辑（类似 std::vector）
