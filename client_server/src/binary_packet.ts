@@ -36,7 +36,7 @@ export function BOTypeFromString(name: string): BOType | undefined {
 }
 
 export class Snowflake {
-  static readonly EPOCH_FROM = BigInt(1609459200000); // 2021-01-01T00:00:00Z 的时间戳
+  static readonly EPOCH_FROM = 1609459200000n; // 2021-01-01T00:00:00Z 的时间戳
   machineId = 1n; // 机器 ID，假设为 1
   lastTimestamp = 0n; // 上次生成 ID 的时间戳
   lastSequence = 0n; // 序列号，初始为 0
@@ -65,7 +65,7 @@ export class Snowflake {
   }
 
   static parse(id: bigint): { timestamp: bigint, machineId: bigint, sequence: bigint } {
-    const timestamp = id >> 22n + Snowflake.EPOCH_FROM; // 获取时间戳并加上 EPOCH_FROM
+    const timestamp = (id >> 22n) + Snowflake.EPOCH_FROM; // 获取时间戳并加上 EPOCH_FROM
     const machineId = (id >> 12n) & 0x3FFn; // 假设机器 ID 占 10 位
     const sequence = id & 0xFFFn; // 序列号占 12 位
     return { timestamp, machineId, sequence };
