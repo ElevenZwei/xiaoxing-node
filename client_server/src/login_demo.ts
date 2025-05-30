@@ -45,6 +45,13 @@ import { Router } from 'express';
 
 export const loginDemoRouter = Router();
 
+function getPosixTimeZoneString() {
+  const offsetMinutes = new Date().getTimezoneOffset();  // 单位是分钟，UTC-本地
+  const offsetHours = -offsetMinutes / 60;  // 本地-UTC（正值表示东区）
+  let tzName = "UTC"; // 可自定义名字，比如 "CST, UTC"
+  return `${tzName}${offsetHours >= 0 ? '-' : '+'}${Math.abs(offsetHours)}`;
+}
+
 loginDemoRouter.post('/', (request, reply) => {
   // const body = request.body as any;
   // skip body validation for demo purposes
@@ -59,9 +66,11 @@ loginDemoRouter.post('/', (request, reply) => {
       token: "demo-token",
     },
     server_time: {
-      timestamp: Math.floor(Date.now() / 1000), // current time in seconds
-      timezone_offset: new Date().getTimezoneOffset() * 60, // offset in seconds
+      timestamp: Date.now(),  // current timestamp in milliseconds
+      timezone_posix: getPosixTimeZoneString(), // e.g., "CST-8"
     },
   };
+  // log
+  console.log('Login request received, replying with:', response);
   reply.json(response);
 });
