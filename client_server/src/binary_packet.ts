@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { OpusDecoder, OpusDecoderSampleRate } from 'opus-decoder';
 
 // 定义 BOSIZE_UNKNOWN 常量，表示未知大小
 const BOSIZE_UNKNOWN = 0xFFFFFFFF;
@@ -12,6 +13,8 @@ const BOSIZE_UNKNOWN = 0xFFFFFFFF;
 export enum BOType {
     RawText = 0x01,     // 原始文本
     AudioOpus = 0x10,   // 音频数据（Opus 编码）
+    AudioOpusFrame = 0x11,  // 音频数据帧（Opus 编码）
+    AudioWav = 0x12,    // 音频数据（Wav 编码）
     ImageJpeg = 0x20,   // 图像数据（JPEG 编码）
 }
 
@@ -20,6 +23,7 @@ export function BOTypeToString(value: BOType): string {
   switch (value) {
     case BOType.RawText: return "RawText";
     case BOType.AudioOpus: return "AudioOpus";
+    case BOType.AudioOpusFrame: return "AudioOpusFrame";
     case BOType.ImageJpeg: return "ImageJpeg";
     default: return `Unknown(${value})`;
   }
@@ -30,6 +34,7 @@ export function BOTypeFromString(name: string): BOType | undefined {
   switch (name) {
     case "RawText": return BOType.RawText;
     case "AudioOpus": return BOType.AudioOpus;
+    case "AudioOpusFrame": return BOType.AudioOpusFrame;
     case "ImageJpeg": return BOType.ImageJpeg;
     default: return undefined;
   }
@@ -165,12 +170,88 @@ export class BinaryPacket {
     }
 };
 
+const validSampleRates: OpusDecoderSampleRate[] = [8000, 12000, 16000, 24000, 48000];
+function isValidOpusSampleRate(rate: number): rate is OpusDecoderSampleRate {
+  return validSampleRates.includes(rate as OpusDecoderSampleRate);
+}
+
+export class AudioDecoder {
+  sampleRate: OpusDecoderSampleRate = 16000;
+  channels: number = 1;
+  decoder: OpusDecoder<OpusDecoderSampleRate>;
+  constructor(sampleRate: number, channels: number) {
+    if (isValidOpusSampleRate(sampleRate)) {
+      this.sampleRate = sampleRate;
+    } else {
+      console.error(`invalid sample rate ${sampleRate}, default to ${this.sampleRate}`);
+    }
+    this.channels = channels;
+    this.decoder = new OpusDecoder({
+      sampleRate: this.sampleRate,
+      channels: this.channels,
+    });
+  }
+  async ready() {
+    await this.decoder.ready;
+  }
+  free(): void {
+    this.decoder.free();
+  }
+  decodeFrame(frame: Buffer): Buffer {
+    const {channelData, samplesDecoded, sampleRate} = this.decoder.decodeFrame(frame);
+    console.log(`opus decoder: cnt=${samplesDecoded}, rate=${sampleRate}`);
+    return this.float32ToInt16Buffer(channelData[0]);
+  }
+  packWav(pcmData: Buffer): Buffer {
+    const bytesPerSample = 2;
+    const blockAlign = this.channels * bytesPerSample;
+    const byteRate = this.sampleRate * blockAlign;
+    const dataSize = pcmData.length;
+    const buffer = Buffer.alloc(44 + dataSize);
+
+    // RIFF header
+    buffer.write("RIFF", 0); // ChunkID
+    buffer.writeUInt32LE(36 + dataSize, 4); // ChunkSize
+    buffer.write("WAVE", 8); // Format
+
+    // fmt subchunk
+    buffer.write("fmt ", 12); // Subchunk1ID
+    buffer.writeUInt32LE(16, 16); // Subchunk1Size
+    buffer.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+    buffer.writeUInt16LE(this.channels, 22); // NumChannels
+    buffer.writeUInt32LE(this.sampleRate, 24); // SampleRate
+    buffer.writeUInt32LE(byteRate, 28); // ByteRate
+    buffer.writeUInt16LE(blockAlign, 32); // BlockAlign
+    buffer.writeUInt16LE(16, 34); // BitsPerSample
+
+    // data subchunk
+    buffer.write("data", 36); // Subchunk2ID
+    buffer.writeUInt32LE(dataSize, 40); // Subchunk2Size
+
+    // PCM data
+    pcmData.copy(buffer, 44);
+    return buffer;
+  }
+
+  private float32ToInt16Buffer(f32Samples: Float32Array): Buffer {
+    const buffer = Buffer.alloc(f32Samples.length * 2); // 2 bytes per sample
+    for (let i = 0; i < f32Samples.length; i++) {
+      let sample = f32Samples[i];
+      sample = Math.max(-1, Math.min(1, sample)); // 限制范围 [-1, 1]
+      const int16 = Math.round(sample * 32767); // 转换为 Int16
+      buffer.writeInt16LE(int16, i * 2);
+    }
+    return buffer;
+  }
+}
+
 export class BinaryObject {
   bosid: bigint = 0n;
   type: BOType = BOType.RawText; // 默认类型为 RawText
   size: number = 0;
   cursor: number = 0;
   buf: Buffer = Buffer.alloc(0); // 初始为空 Buffer
+  decoder: undefined | AudioDecoder = undefined;
 
   fromHeader(header: BinaryPacketHeader): void {
     this.bosid = header.bosid;
@@ -194,7 +275,7 @@ export class BinaryObject {
       const fileBuffer = await fs.promises.readFile(filePath);
       this.size = fileBuffer.length;
       this.init_alloc();
-      this.appendData(fileBuffer);
+      this.appendDataRaw(fileBuffer);
     } catch (err) {
       console.error(`Failed to read file ${filePath}:`, err);
       throw err; // 重新抛出错误以便调用者处理
@@ -210,9 +291,29 @@ export class BinaryObject {
     }
   }
 
+  async enableAudioConversion(sampleRate: number, channels: number) {
+    // 暂时把 AudioOpus 也加上转码。
+    if (this.type === BOType.AudioOpusFrame
+        || this.type === BOType.AudioOpus) {
+      this.type = BOType.AudioWav;
+      this.size = BOSIZE_UNKNOWN;
+      this.decoder = new AudioDecoder(sampleRate, channels);
+      await this.decoder.ready();
+    }
+  }
+
+  appendDataWithConversion(data: Buffer): Buffer {
+    if (this.decoder !== undefined) {
+      // calling decoder to convert opus into wav.
+      data = this.decoder.decodeFrame(data);
+    }
+    this.appendDataRaw(data);
+    return data;
+  }
+
   /** 向 buffer 添加数据，自动扩容 */
-  appendData(data: Buffer): void {
-    if (this.size != BOSIZE_UNKNOWN && this.cursor >= this.size && data.length > 0) {
+  appendDataRaw(data: Buffer): void {
+    if (this.size !== BOSIZE_UNKNOWN && this.cursor >= this.size && data.length > 0) {
       // 有些时候 Stop 会比最后两帧数据来得更早，这种时候通常是音频数据，我选择放弃最后的结尾数据。
       console.warn(`Cannot append to a completed file, size: ${this.size}`);
       return;
@@ -238,6 +339,12 @@ export class BinaryObject {
 
   /** 最后截断 buffer，并更新 size */
   stopAppending(): void {
+    if (this.decoder !== undefined) {
+      const wav = this.decoder.packWav(this.buf.subarray(0, this.cursor));
+      this.cursor = 0;
+      this.appendDataRaw(wav);
+    }
+
     if (this.size !== BOSIZE_UNKNOWN && this.cursor > this.size) {
       console.error(
         `Cursor ${this.cursor} exceeds declared size ${this.size}, truncating`
@@ -260,9 +367,9 @@ export class BinaryObject {
   getData(): Buffer {
     // 如果 size 是未知的，返回当前 cursor 长度的数据
     if (this.size === BOSIZE_UNKNOWN) {
-        return this.buf.subarray(0, this.cursor);
+      return this.buf.subarray(0, this.cursor);
     } else {
-        return this.buf.subarray(0, this.size);
+      return this.buf.subarray(0, this.size);
     }
   }
 
@@ -280,6 +387,7 @@ export class BinaryObject {
       }
       onDone(fullPath);
     });
+    return fullPath;
   }
 
   toJSON() {
@@ -292,7 +400,7 @@ export class BinaryObject {
       // data: this.getData().toString('hex') // 或者其他格式
     };
   }
-  
+
   toBinaryPackets(maxFramePayloadSize: number): BinaryPacket[] {
     if (this.size === BOSIZE_UNKNOWN) {
       throw new Error("Cannot create BinaryPackets from BinaryObject with unknown size");
@@ -302,7 +410,7 @@ export class BinaryObject {
     while (offset < this.size) {
       const frameSize = Math.min(maxFramePayloadSize, this.size - offset);
       const isLastFrame = (offset + frameSize >= this.size) ? 1 : 0;
-      
+
       const header = new BinaryPacketHeader();
       header.bosid = this.bosid;
       header.size = this.size;
@@ -324,6 +432,8 @@ export class BinaryObject {
     switch (type) {
       case BOType.RawText: return ".txt";
       case BOType.AudioOpus: return ".opus";
+      case BOType.AudioOpusFrame: return ".opusframes";
+      case BOType.AudioWav: return ".wav";
       case BOType.ImageJpeg: return ".jpg";
       default: return ".bin";
     }

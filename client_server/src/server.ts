@@ -34,7 +34,7 @@ if (!fs.existsSync(dataDir)) {
 // 启动监听
 const localhost = true;
 const host = localhost ? '127.0.0.1' : '0.0.0.0';
-const port = 3000;
+const port = 6800;
 
 server.listen(port, host, () => {
   console.log(`Server listening on http://${host}:${port}`);

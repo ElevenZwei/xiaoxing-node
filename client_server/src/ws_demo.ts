@@ -1,4 +1,6 @@
 import { WebSocket, RawData, WebSocketServer } from 'ws';
+import axios from 'axios';
+import FormData from 'form-data';
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
 
 export function wsEchoHandler(wss: WebSocketServer) {
@@ -39,9 +41,9 @@ export function wsDemoHandler(wss: WebSocketServer) {
 
 function handleDemoConnection(socket: WebSocket) {
   console.log('WebSocket demo connection established');
-  socket.on('message', (message: RawData, isBinary: boolean) => {
+  socket.on('message', async (message: RawData, isBinary: boolean) => {
     if (isBinary) {
-      wsBinaryHandler(socket, message as Buffer);
+      await wsBinaryHandler(socket, message as Buffer);
     } else {
       const msg = message.toLocaleString();
       wsMessageHandler(socket, msg);
@@ -59,6 +61,8 @@ class DemoContext {
   machine_id: number;
   bo_map: Map<bigint, BinaryObject> = new Map();
   last_append_bosid: bigint = BigInt(0);
+  client_sample_rate: number = 16000;
+  client_channels: number = 1;
   constructor(machine_id: number) {
     this.machine_id = machine_id;
   }
@@ -84,7 +88,7 @@ function wsMessageHandler(socket: WebSocket, message: string) {
   }
 }
 
-function wsBinaryHandler(socket: WebSocket, message: Buffer) {
+async function wsBinaryHandler(socket: WebSocket, message: Buffer) {
   console.log('Received binary message:', message);
   // Here you can handle binary messages, e.g., audio data
   const context = wsContextMap.get(socket);
@@ -103,10 +107,12 @@ function wsBinaryHandler(socket: WebSocket, message: Buffer) {
   if (!obj) {
     obj = new BinaryObject();
     obj.fromHeader(packet.header);
+    await obj.enableAudioConversion(context.client_sample_rate, context.client_channels);
     context.bo_map.set(packet.header.bosid, obj);
     console.log('New BinaryObject started with bosid:', obj.bosid);
   }
-  obj.appendData(packet.data);
+  obj.appendDataWithConversion(packet.data);
+
   if (packet.header.isLastFrame) {
     obj.stopAppending();
     console.log('Received complete BinaryObject:', obj.toJSON());
@@ -123,7 +129,19 @@ function handleClientHello(socket: WebSocket, json: any) {
   console.log('Client says hello');
   // random machine_id for demo purposes
   const machine_id = Math.floor(Math.random() * 256); // Random machine ID between 0 and 255
-  wsContextMap.set(socket, new DemoContext(machine_id));
+  const context = new DemoContext(machine_id);
+  wsContextMap.set(socket, context);
+  const audio_params = json.audio_params;
+  if (typeof audio_params === 'object') {
+    const sample_rate = audio_params.sample_rate;
+    const channels = audio_params.channels;
+    if (typeof sample_rate === 'number') {
+      context.client_sample_rate = sample_rate;
+    }
+    if (typeof channels === 'number') {
+      context.client_channels = channels;
+    }
+  }
   const response = {
     type: 'hello',
     transport: 'websocket',
@@ -159,7 +177,7 @@ function handleClientHello(socket: WebSocket, json: any) {
  * }
  * @returns 
  */
-function handleClientListen(socket: WebSocket, json: any) {
+async function handleClientListen(socket: WebSocket, json: any) {
   console.log('Client listen mode change:', json);
   const context = wsContextMap.get(socket);
   if (!context) {
@@ -200,6 +218,11 @@ function handleClientListen(socket: WebSocket, json: any) {
     last_obj.saveToFile('./data', `demo_${context.machine_id}_${last_bosid.toString()}`, (fullPath) => {
       console.log(`Saved BinaryObject to ${fullPath}`);
     });
+
+    const sentence = await demoSTT(last_obj);
+    if (sentence !== null)
+      sendSTT(socket, sentence);
+
     // delete after half second.
     // 这是一个临时的解决方案，有时候有的数据包会在 stop 之后才到达。
     // 因为这是音频数据，所以我们假设最后的数据包可以忽略。
@@ -210,9 +233,31 @@ function handleClientListen(socket: WebSocket, json: any) {
       console.log(`Deleted BinaryObject with bosid: ${last_bosid.toString()} from map`);
     }, 500);
     // demo sentence
-    sendSentence(socket, '这是一个测试句子。');
+    sendAIReply(socket, '这是一个测试句子。');
     return;
   }
+}
+
+async function demoSTT(bo: BinaryObject): Promise<null | string> {
+    // demo asr part
+    try {
+      const asr = await runASR(bo.bosid, bo.buf);
+      const asrdata = asr.data;
+      console.log("ASR returns:", asr.data);
+      const asrres = asrdata.result;
+      if (asrres.length === 0) {
+        return null;
+      }
+      const asrstr = asrres[0].text;
+      if (typeof asrstr !== 'string') {
+        console.error('ASR type error.');
+        return null;
+      }
+      return asrstr;
+    } catch (e) {
+      console.error("ASR error:", e);
+      return null;
+    }
 }
 
 /**
@@ -226,10 +271,23 @@ function handleClientListen(socket: WebSocket, json: any) {
  *  "text": <string>,
  *  }
  */
-function sendSentence(socket: WebSocket, sentence: string) {
+function sendAIReply(socket: WebSocket, sentence: string) {
+  console.log(`sendAIReply: ${sentence}`);
   const response = {
     type: 'tts',
     state: 'sentence_start',
+    text: sentence,
+  };
+  socket.send(JSON.stringify(response));
+}
+
+/**
+ *
+ */
+function sendSTT(socket: WebSocket, sentence: string) {
+  console.log(`sendSTT: ${sentence}`);
+  const response = {
+    type: 'stt',
     text: sentence,
   };
   socket.send(JSON.stringify(response));
@@ -261,7 +319,7 @@ function sendImage(socket: WebSocket, imageData: Buffer) {
   // Create a BinaryObject and append the image data
   const obj = new BinaryObject();
   obj.fromProps(bosid, BOType.ImageJpeg, imageData.length);
-  obj.appendData(imageData);
+  obj.appendDataRaw(imageData);
   obj.stopAppending(); // Mark the object as complete
   console.log('Sending image with bosid:', bosid.toString(), ", size:", obj.size);
   // Send the BinaryObject as multiple BinaryPackets
@@ -274,3 +332,21 @@ function sendImage(socket: WebSocket, imageData: Buffer) {
     socket.send(buffer);
   });
 }
+
+
+function runASR(bosid: bigint, audio: Buffer) {
+  const form = new FormData();
+  form.append('audio', audio, {
+    filename: 'asr.wav',
+    contentType: 'audio/wav',
+  });
+  return axios.post('http://localhost:8000/recognize', form, {
+    headers: {
+      'X-Task-Id': bosid.toString(),
+      'X-language': 'zh',
+      ...form.getHeaders(),
+    },
+  })
+}
+
+
