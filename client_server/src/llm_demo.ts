@@ -39,8 +39,8 @@ export enum LLMRole {
 };
 
 export type LLMMsg = OpenAI.Chat.ChatCompletionMessageParam;
-export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => void;
-export type AddMessageHookFunction = (msg: LLMMsg) => void;
+export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => boolean;
+export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
 export class LLMHelper {
   api: OpenAI;
   apiModelName: string;
@@ -57,7 +57,7 @@ export class LLMHelper {
               modelName: string,
               contextMsgCnt: number,
               systemPrompt: string | undefined,
-              tools: Record<string, LLMTool> | undefined) {
+              tools: LLMTool[] | undefined) {
     this.api = new OpenAI(getLLMOption(provider)); 
     this.apiModelName = modelName;
     this.contextMsgCnt = contextMsgCnt;
@@ -66,17 +66,45 @@ export class LLMHelper {
     }
     this.systemPrompt = systemPrompt;
     if (tools !== undefined) {
-      this.toolMap = tools;
-      Object.values(tools).forEach((llmt: LLMTool) => this.apiTools.push(llmt.tool));
+      this.toolMap = tools.reduce((acc, item) => {
+          acc[item.name] = item;
+          return acc
+      }, {} as Record<string, LLMTool>);
+      this.update_api_tools();
     }
   }
 
+  // 更新长期保留消息的函数。
+  setSystemPrompt(prompt: string | undefined) {
+    this.systemPrompt = prompt;
+  }
+
+  // 可以用这个函数用来持久化保存聊天记录，也可以阻止某句话放进上下文。
   setAddMessageHook(hook: AddMessageHookFunction | undefined) {
     this.addMsgHook = hook;
   }
 
+  // 可以用这个函数记录 Tool Call 的情况，也可以中止某个工具的过量使用。
   setToolCallHook(hook: ToolCallHookFunction | undefined) {
     this.toolCallHook = hook;
+  }
+
+  // 恢复历史聊天记录。
+  addHistoryMessages(msgs: LLMMsg[]) {
+    msgs.forEach(msg => this.add_msg(msg));
+    this.check_msg_cnt();
+  }
+
+  // 移除一个 LLM 可用的工具。
+  removeTool(name: string) {
+    delete this.toolMap[name];
+    this.update_api_tools();
+  }
+
+  // 增加一个 LLM 可用的工具。
+  addTool(tool: LLMTool) {
+    this.toolMap[tool.name] = tool;
+    this.update_api_tools();
   }
 
   async nextTextReply(content: string | undefined) {
@@ -89,56 +117,64 @@ export class LLMHelper {
     if (hasToolCall) {
       // 这是并发执行 Tool Call ，需要注意并发压力。
       const jobs = toolCalls.map(async (tc: OpenAI.Chat.ChatCompletionMessageToolCall) => {
-        if (this.toolCallHook !== undefined) this.toolCallHook(tc);
-        const args = JSON.parse(tc.function.arguments);
         const toolName = tc.function.name;
+        if (this.toolCallHook !== undefined && this.toolCallHook(tc) === false) {
+          throw new Error(`tool call interrupted by hook: name=${toolName}`);
+        }
         const toolFunc = this.toolMap[toolName]?.callback;
         if (toolFunc == null) {
           throw new Error(`tool not found: name=${toolName}`);
         }
+        const args = tc.function.arguments;
+        const toolArgs = JSON.parse(args);
         try {
-          const toolResult: string = await toolFunc(...args);
+          const toolResult: string = await toolFunc(...toolArgs);
           toolMsgs.push({
             role: LLMRole.Tool,
             tool_call_id: tc.id,
             content: toolResult,
           });
         } catch (err) {
-          console.error(`tool call error: name=${toolName}, args=${tc.function.arguments}`);
+          console.error(`tool call error: name=${toolName}, args=${args}`);
           throw err;
         }
       });
+      // 工具调用中的 Error 会向上抛出，由调用者处理要不要给 AI 一个文字回复。
       await Promise.all(jobs);
     }
-    // 仅当没有调用工具或者工具成功调用的时候才记录消息。
+    // 仅当没有调用工具或者工具成功调用的时候才记录 AI 给出的消息。
     this.add_msg(choice.message);
     toolMsgs.forEach(msg => this.add_msg(msg));
     if (!hasToolCall) {
       return choice.message.content;
     }
     // 现在假定它不会调用两次工具，这里实际上需要递归和层叠检查。
-    const secondResp = await this.nextResponse(LLMRole.User, undefined);
+    const secondResp = await this.nextResponse(undefined, undefined);
     const secondChoice = secondResp.choices[0];
     this.add_msg(secondChoice.message);
     return secondChoice.message.content;
   }
 
   /**
-   * 这个函数不会删除过量的上下文，仅限内部使用。
+   * 这个函数不会删除过量的上下文，仅限内部使用，不要直接和用户对接。
    */
-  async nextResponse(role: LLMRole, content: string | undefined, toolCallId: string | undefined = undefined) {
+  async nextResponse(role: LLMRole | undefined, content: string | undefined, toolCallId: string | undefined = undefined) {
     if (role === LLMRole.Tool && toolCallId === undefined) {
       throw new Error("ToolCallId should be provided in tool response.");
     }
     const systemMsg: OpenAI.Chat.ChatCompletionSystemMessageParam[] =
-        this.systemPrompt !== undefined ? [{ role: 'system', content: this.systemPrompt }] : [];
+        this.systemPrompt === undefined ? [] : [
+            { role: 'system', content: this.systemPrompt }
+        ];
     const nextMsg: OpenAI.Chat.ChatCompletionMessageParam[] = 
-        content !== undefined ? [
+        (role === undefined || content === undefined) ? [] : [
             role === LLMRole.Tool
                 ? { role, content, tool_call_id: toolCallId as string }
                 : { role, content }
-        ] : [];
-    return await this.api.chat.completions.create({
+        ];
+    // 目前设计成即使没有得到返回也会把发送的消息加入记录。
+    if (nextMsg.length > 0) this.add_msg(nextMsg[0]);
+    const res = await this.api.chat.completions.create({
       model: this.apiModelName,
       messages: [
         ...systemMsg,
@@ -148,8 +184,13 @@ export class LLMHelper {
       tools: this.apiTools,
       tool_choice: 'auto',
     });
+    return res;
   }
   
+  private update_api_tools() {
+    Object.values(this.toolMap).forEach((llmt: LLMTool) => this.apiTools.push(llmt.tool));
+  }
+
   private check_msg_cnt() {
     if (this.apiMessages.length > this.contextMsgCnt) {
       this.apiMessages = this.apiMessages.slice(-this.contextMsgCnt);
@@ -157,7 +198,11 @@ export class LLMHelper {
   }
 
   private add_msg(msg: LLMMsg) {
-    if (this.addMsgHook !== undefined) this.addMsgHook(msg);
+    if (this.addMsgHook !== undefined && this.addMsgHook(msg) === false)  {
+      console.warn(`add message to context interrupted by hook: ${msg.content}`);
+      return;
+    }
     this.apiMessages.push(msg);
   }
+
 }
