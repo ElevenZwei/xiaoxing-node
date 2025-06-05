@@ -12,6 +12,10 @@
 #!.yarn/cache
 .pnp.*
 
-data/*
+# typescript
 dist/
 node_modules/
+
+# data and config
+data/*
+config/key.yaml
