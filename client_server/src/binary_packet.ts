@@ -24,6 +24,7 @@ export function BOTypeToString(value: BOType): string {
     case BOType.RawText: return "RawText";
     case BOType.AudioOpus: return "AudioOpus";
     case BOType.AudioOpusFrame: return "AudioOpusFrame";
+    case BOType.AudioWav: return "AudioWav";
     case BOType.ImageJpeg: return "ImageJpeg";
     default: return `Unknown(${value})`;
   }
@@ -35,6 +36,7 @@ export function BOTypeFromString(name: string): BOType | undefined {
     case "RawText": return BOType.RawText;
     case "AudioOpus": return BOType.AudioOpus;
     case "AudioOpusFrame": return BOType.AudioOpusFrame;
+    case "AudioWav": return BOType.AudioWav;
     case "ImageJpeg": return BOType.ImageJpeg;
     default: return undefined;
   }
@@ -299,6 +301,13 @@ export class BinaryObject {
       this.size = BOSIZE_UNKNOWN;
       this.decoder = new AudioDecoder(sampleRate, channels);
       await this.decoder.ready();
+    }
+  }
+  
+  disableAudioConversion() {
+    if (this.decoder !== undefined) {
+      this.decoder.free();
+      this.decoder = undefined;
     }
   }
 

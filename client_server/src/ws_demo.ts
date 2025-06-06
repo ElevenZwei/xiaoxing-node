@@ -2,6 +2,7 @@ import { WebSocket, RawData, WebSocketServer } from 'ws';
 import axios from 'axios';
 import FormData from 'form-data';
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
+import { LLMHelper, LLMProvider, LLMTool } from './llm_demo';
 
 export function wsEchoHandler(wss: WebSocketServer) {
   wss.on('connection', (socket: WebSocket) => {
@@ -63,8 +64,10 @@ class DemoContext {
   last_append_bosid: bigint = BigInt(0);
   client_sample_rate: number = 16000;
   client_channels: number = 1;
-  constructor(machine_id: number) {
+  llm_helper: LLMHelper;
+  constructor(machine_id: number, helper: LLMHelper) {
     this.machine_id = machine_id;
+    this.llm_helper = helper;
   }
 };
 const wsContextMap = new WeakMap<WebSocket, DemoContext>();
@@ -125,11 +128,22 @@ function wsErrorHandler(socket: WebSocket, error: Error) {
   socket.close(1000, 'Error occurred');
 }
 
+function createNewContext(machine_id: number): DemoContext {
+  const systemPrompt = 
+    `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。`;
+  const helper = new LLMHelper(
+      LLMProvider.OpenRouter, 'openai/gpt-4o',
+      20, systemPrompt, undefined);
+  const context = new DemoContext(machine_id, helper);
+  return context;
+}
+
+
 function handleClientHello(socket: WebSocket, json: any) {
   console.log('Client says hello');
   // random machine_id for demo purposes
   const machine_id = Math.floor(Math.random() * 256); // Random machine ID between 0 and 255
-  const context = new DemoContext(machine_id);
+  const context = createNewContext(machine_id);
   wsContextMap.set(socket, context);
   const audio_params = json.audio_params;
   if (typeof audio_params === 'object') {
@@ -208,6 +222,8 @@ async function handleClientListen(socket: WebSocket, json: any) {
       return;
     }
     last_obj.stopAppending();
+    // 会用到转码的都是在这里停止的流媒体。
+    last_obj.disableAudioConversion();
     console.log('Processing last BinaryObject:', last_obj.toJSON());
     // filter size > 100MB
     if (last_obj.size > 100 * 1024 * 1024) { // 100MB
@@ -219,10 +235,6 @@ async function handleClientListen(socket: WebSocket, json: any) {
       console.log(`Saved BinaryObject to ${fullPath}`);
     });
 
-    const sentence = await demoSTT(last_obj);
-    if (sentence !== null)
-      sendSTT(socket, sentence);
-
     // delete after half second.
     // 这是一个临时的解决方案，有时候有的数据包会在 stop 之后才到达。
     // 因为这是音频数据，所以我们假设最后的数据包可以忽略。
@@ -232,8 +244,31 @@ async function handleClientListen(socket: WebSocket, json: any) {
       context.last_append_bosid = BigInt(0); // Reset last bosid
       console.log(`Deleted BinaryObject with bosid: ${last_bosid.toString()} from map`);
     }, 500);
-    // demo sentence
-    sendAIReply(socket, '这是一个测试句子。');
+
+    let sentence = null;
+    try {
+      sentence = await demoSTT(last_obj);
+    } catch (err) {
+      sendAIReply(socket, '语音识别没能成功。');
+      throw err;
+    }
+    if (sentence !== null) {
+      sendSTT(socket, sentence);
+      let aiText = null;
+      try {
+        aiText = await context.llm_helper.nextTextReply(sentence);
+      } catch (err) {
+        sendAIReply(socket, 'AI 通信没能成功。');
+        throw err;
+      }
+      if (aiText !== null)
+        sendAIReply(socket, aiText);
+      else
+        sendAIReply(socket, 'AI 没有给出回答。');
+    } else {
+      // demo sentence
+      sendAIReply(socket, '你没有说话，这是一个测试句子。');
+    }
     return;
   }
 }
