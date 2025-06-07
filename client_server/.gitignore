@@ -18,4 +18,5 @@ node_modules/
 
 # data and config
 data/*
+tmp/*
 config/key.yaml

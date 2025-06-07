@@ -44,7 +44,7 @@ function handleDemoConnection(socket: WebSocket) {
   console.log('WebSocket demo connection established');
   socket.on('message', async (message: RawData, isBinary: boolean) => {
     if (isBinary) {
-      await wsBinaryHandler(socket, message as Buffer);
+      await wsBinaryHandler(socket, Buffer.from(message as ArrayBuffer));
     } else {
       const msg = message.toLocaleString();
       wsMessageHandler(socket, msg);
@@ -252,8 +252,19 @@ async function handleClientListen(socket: WebSocket, json: any) {
       sendAIReply(socket, '语音识别没能成功。');
       throw err;
     }
-    if (sentence !== null) {
+
+    if (sentence === null) {
+        sendAIReply(socket, '语音识别没有给出回答。');
+        return;
+    } else {
+      // if (sentence.length === 0) {
+      //   // demo sentence
+      //   sendAIReply(socket, '你没有说话，只是按下了录音按钮。');
+      //   return;
+      // }
+      // 发送语音识别的结果。
       sendSTT(socket, sentence);
+      // LLM 通信
       let aiText = null;
       try {
         aiText = await context.llm_helper.nextTextReply(sentence);
@@ -261,15 +272,12 @@ async function handleClientListen(socket: WebSocket, json: any) {
         sendAIReply(socket, 'AI 通信没能成功。');
         throw err;
       }
-      if (aiText !== null)
+      // 发送 LLM 的回答。
+      if (aiText !== null && aiText.length > 0)
         sendAIReply(socket, aiText);
       else
         sendAIReply(socket, 'AI 没有给出回答。');
-    } else {
-      // demo sentence
-      sendAIReply(socket, '你没有说话，这是一个测试句子。');
     }
-    return;
   }
 }
 

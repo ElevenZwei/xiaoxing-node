@@ -42,6 +42,7 @@ export type LLMMsg = OpenAI.Chat.ChatCompletionMessageParam;
 export type LLMResponse = OpenAI.Chat.ChatCompletionMessage;
 export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => boolean;
 export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
+export type OnDeltaHookFunction = (content: string) => void;
 export class LLMHelper {
   api: OpenAI;
   apiModelName: string;
@@ -52,6 +53,9 @@ export class LLMHelper {
   systemPrompt: string | undefined;
   addMsgHook: AddMessageHookFunction | undefined = undefined;
   toolCallHook: ToolCallHookFunction | undefined = undefined;
+  onDeltaHook: OnDeltaHookFunction | undefined = undefined;
+
+  /* 在以后功能更加多的时候分拆成 Web, Tool, History 三个类型。 */
 
   /** 
    * contextMsgCnt is the maximum number of messages to keep in context.
@@ -95,10 +99,25 @@ export class LLMHelper {
     this.toolCallHook = hook;
   }
 
+  // 可以用这个函数获取流式文本内容的输出。
+  setOnDeltaHook(hook: OnDeltaHookFunction | undefined) {
+    this.onDeltaHook = hook;
+  }
+
   // 恢复历史聊天记录。
   addHistoryMessages(msgs: LLMMsg[]) {
     msgs.forEach(msg => this.addMessage(msg));
     this.checkMessageLimit();
+  }
+
+  // 获得当前聊天记录的快照
+  getHistoryMessages(): LLMMsg[] {
+    return this.apiMessages.slice();
+  }
+
+  // 清空聊天记录
+  clearHistoryMessages() {
+    this.apiMessages = [];
   }
 
   // 移除一个 LLM 可用的工具。
@@ -125,8 +144,7 @@ export class LLMHelper {
    */
   async nextTextReply(content: string | undefined) {
     this.checkMessageLimit();
-    const firstResp = await this.nextResponse(LLMRole.User, content);
-    const firstMessage = firstResp.choices[0].message;
+    const firstMessage = await this.nextResponse(LLMRole.User, content);
     const message = await this.handlePotentialToolCall(firstMessage);
     this.addMessage(message);
     return message.content;
@@ -185,8 +203,7 @@ export class LLMHelper {
       this.addMessage(message);
       toolMsgs.forEach(msg => this.addMessage(msg));
       // 等待下一次回复
-      const secondResp = await this.nextResponse(undefined, undefined);
-      message = secondResp.choices[0].message;
+      message = await this.nextResponse(undefined, undefined);
     }
     return message;
   }
@@ -194,7 +211,7 @@ export class LLMHelper {
   /**
    * 这个函数不会删除过量的上下文，仅限内部使用，不要直接和用户对接。
    */
-  async nextResponse(role: LLMRole | undefined, content: string | undefined, toolCallId: string | undefined = undefined) {
+  async nextResponse(role: LLMRole | undefined, content: string | undefined, toolCallId: string | undefined = undefined): Promise<LLMResponse> {
     if (role === LLMRole.Tool && toolCallId === undefined) {
       throw new Error("ToolCallId should be provided in tool response.");
     }
@@ -210,7 +227,7 @@ export class LLMHelper {
         ];
     // 目前设计成即使没有得到返回也会把发送的消息加入记录。
     if (nextMsg.length > 0) this.addMessage(nextMsg[0]);
-    const res = await this.api.chat.completions.create({
+    const stream = await this.api.chat.completions.create({
       model: this.apiModelName,
       messages: [
         ...systemMsg,
@@ -219,7 +236,48 @@ export class LLMHelper {
       ],
       tools: this.apiTools,
       tool_choice: 'auto',
+      stream: true,
     });
+    let resContent = '';
+    let resRefusal = '';
+    let resCalls: OpenAI.Chat.ChatCompletionMessageToolCall[] = [];
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta;
+      if (delta === undefined) continue;
+      if (delta.tool_calls != null && delta.tool_calls.length > 0) {
+        delta.tool_calls?.forEach((item) => {
+          // Restore ToolCall structure from deltas.
+          const idx = item.index;
+          if (resCalls[idx] === undefined) {
+            // insert new ToolCall
+            resCalls[idx] = {
+              id: '', function: { arguments: '', name: '', },
+              type: 'function',
+            };
+          }
+          const tc = resCalls[idx];
+          if (item.id !== undefined) { tc.id += item.id; }
+          if (item.function?.name !== undefined) { tc.function.name += item.function.name; }
+          if (item.function?.arguments !== undefined) { tc.function.arguments += item.function.arguments; }
+        });
+      }
+      if (delta.content != null && delta.content.length > 0) {
+        resContent += delta.content;
+        if (this.onDeltaHook) {
+          this.onDeltaHook(delta.content);
+        }
+      }
+      if (delta.refusal != null && delta.refusal.length > 0) {
+        resRefusal += delta.refusal;
+      }
+    }
+    // make final response
+    const res: LLMResponse = {
+      role: LLMRole.AI,
+      content: resContent.length === 0 ? null : resContent,
+      refusal: resRefusal.length === 0 ? null : resRefusal,
+      tool_calls: resCalls.length === 0 ? undefined : resCalls,
+    };
     return res;
   }
   

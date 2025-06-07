@@ -312,6 +312,7 @@ __metadata:
     opus-decoder: "npm:^0.7.10"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.8.3"
+    uuid: "npm:^11.1.0"
     ws: "npm:^8.18.2"
     yaml: "npm:^2.8.0"
   languageName: unknown
@@ -1063,6 +1064,15 @@ __metadata:
   version: 1.0.0
   resolution: "unpipe@npm:1.0.0"
   checksum: 10c0/193400255bd48968e5c5383730344fbb4fa114cdedfab26e329e50dd2d81b134244bb8a72c6ac1b10ab0281a58b363d06405632c9d49ca9dfd5e90cbd7d0f32c
+  languageName: node
+  linkType: hard
+
+"uuid@npm:^11.1.0":
+  version: 11.1.0
+  resolution: "uuid@npm:11.1.0"
+  bin:
+    uuid: dist/esm/bin/uuid
+  checksum: 10c0/34aa51b9874ae398c2b799c88a127701408cd581ee89ec3baa53509dd8728cbb25826f2a038f9465f8b7be446f0fbf11558862965b18d21c993684297628d4d3
   languageName: node
   linkType: hard
 
