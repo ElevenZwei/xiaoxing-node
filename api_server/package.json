@@ -1,0 +1,14 @@
+{
+  "name": "api_server",
+  "packageManager": "yarn@4.6.0",
+  "dependencies": {
+    "@prisma/client": "^6.9.0",
+    "express": "^5.1.0",
+    "prisma": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.8.3"
+  }
+}
