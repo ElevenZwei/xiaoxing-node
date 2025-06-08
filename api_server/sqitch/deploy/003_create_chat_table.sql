@@ -74,6 +74,7 @@ create index idx_tool_call_tool on llm_tool_call(tool_id);
 
 -- LLM 工具调用的二进制对象（如图片、文件等）存储
 create table llm_tool_artifact (
+    entry_id           bigint primary key,
     call_id            bigint references llm_tool_call(call_id) on delete cascade,
     artifact_id        bigint references binary_object(object_id) on delete cascade,
     artifact_name      text not null,
@@ -90,10 +91,10 @@ create table llm_avatar_info (
     pinned_prompt      text,
     first_message      text,
     avatar_image_id    bigint references binary_object(object_id) on delete set null,
-    llm_provider_enum  bigint not null references type_value_info(type_value),
+    llm_provider_enum  integer not null references type_value_info(type_value),
     llm_model_name     text not null,
     llm_model_args     jsonb not null,
-    tts_provider_enum  bigint not null references type_value_info(type_value),
+    tts_provider_enum  integer not null references type_value_info(type_value),
     tts_voice_name     text not null,
     tts_model_args     jsonb not null,
     is_public          boolean not null default false,
