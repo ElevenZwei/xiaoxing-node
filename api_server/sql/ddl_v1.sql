@@ -1,3 +1,6 @@
+-- 2025-06-08
+-- PostgreSQL DDL for the LLM Chat Application
+
 -- 用户类型/值定义表（不常查询，仅启动加载）
 create table type_value_info (
     type_value          integer primary key,
