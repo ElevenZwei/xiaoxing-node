@@ -16,3 +16,7 @@ node_modules/
 # Prisma
 /generated/prisma
 .env
+
+# config
+src/config/env.ts
+
