@@ -4,3 +4,4 @@
 001_create_basic_table 2025-06-08T08:42:41Z xuetao <xuetao@elf4-intel8280-30-6> # Create fundamental tables.
 002_create_user_table 2025-06-08T08:44:28Z xuetao <xuetao@elf4-intel8280-30-6> # Create user tables.
 003_create_chat_table 2025-06-08T08:44:53Z xuetao <xuetao@elf4-intel8280-30-6> # Create chat tables.
+004_insert_basic_data 2025-06-08T17:03:49Z xuetao <xuetao@elf4-intel8280-30-6> # Insert basic data.
