@@ -64,6 +64,7 @@ create table user_credential_history(
 
 -- 用户登录的历史记录。
 create table user_login_history (
+    login_activity_id   bigint primary key,
     user_id             bigint references user_info(user_id) on delete cascade,
     login_from_ip       text not null,
     login_server_id     integer not null,
@@ -97,6 +98,7 @@ create table device_info_history (
 
 -- 设备的登录历史记录。
 create table device_login_history (
+    login_activity_id   bigint primary key,
     device_id           bigint references device_info(device_id) on delete cascade,
     login_from_ip       text not null,
     login_server_id     integer not null,
@@ -107,7 +109,10 @@ create index idx_deivce_login_id on device_login_history(device_id);
 
 -- 设备的注册过程。
 create table device_registration(
+    registration_id     bigint primary key,
+    -- 设备 ID，关联到 device_info 表。
     device_id           bigint references device_info(device_id) on delete cascade,
+    -- 设备序列号，通常是设备的唯一标识符，例如 ESP32 EFUSE ID。
     device_serial       text not null,
     registration_code   text not null,
     registered_at       timestamptz not null default now(),
@@ -190,6 +195,7 @@ create index idx_tool_call_tool on llm_tool_call(tool_id);
 
 -- LLM 工具调用的二进制对象（如图片、文件等）存储
 create table llm_tool_artifact (
+    entry_id           bigint primary key,
     call_id            bigint references llm_tool_call(call_id) on delete cascade,
     artifact_id        bigint references binary_object(object_id) on delete cascade,
     artifact_name      text not null,
@@ -206,10 +212,10 @@ create table llm_avatar_info (
     pinned_prompt      text,
     first_message      text,
     avatar_image_id    bigint references binary_object(object_id) on delete set null,
-    llm_provider_enum  bigint not null references type_value_info(type_value),
+    llm_provider_enum  integer not null references type_value_info(type_value),
     llm_model_name     text not null,
     llm_model_args     jsonb not null,
-    tts_provider_enum  bigint not null references type_value_info(type_value),
+    tts_provider_enum  integer not null references type_value_info(type_value),
     tts_voice_name     text not null,
     tts_model_args     jsonb not null,
     is_public          boolean not null default false,

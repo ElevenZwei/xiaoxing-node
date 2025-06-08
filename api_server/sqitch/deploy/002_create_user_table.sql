@@ -46,6 +46,7 @@ create table user_credential_history(
 
 -- 用户登录的历史记录。
 create table user_login_history (
+    login_activity_id   bigint primary key,
     user_id             bigint references user_info(user_id) on delete cascade,
     login_from_ip       text not null,
     login_server_id     integer not null,
@@ -79,6 +80,7 @@ create table device_info_history (
 
 -- 设备的登录历史记录。
 create table device_login_history (
+    login_activity_id   bigint primary key,
     device_id           bigint references device_info(device_id) on delete cascade,
     login_from_ip       text not null,
     login_server_id     integer not null,
@@ -89,7 +91,10 @@ create index idx_deivce_login_id on device_login_history(device_id);
 
 -- 设备的注册过程。
 create table device_registration(
+    registration_id     bigint primary key,
+    -- 设备 ID，关联到 device_info 表。
     device_id           bigint references device_info(device_id) on delete cascade,
+    -- 设备序列号，通常是设备的唯一标识符，例如 ESP32 EFUSE ID。
     device_serial       text not null,
     registration_code   text not null,
     registered_at       timestamptz not null default now(),
