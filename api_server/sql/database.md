@@ -39,8 +39,10 @@ User Info Table.
 3. user type (int32)
 4. user email (text)
 5. user locale (text)
-6. user add timestamp
-7. is active
+6. user avatar (int64)
+7. user description (text)
+8. user add timestamp
+9. is allowed
 
 用户安全凭据的表格：
 
@@ -50,10 +52,12 @@ User Credential.
 3. pass type (int32)
 4. pass value (text) 加盐之后 hash 储存。
 5. pass salt (text)
-6. is active (只有最新的密码这个是 true)
-7. pass add timestamp
-8. pass remove timestamp (只有最新的密码这个是 null)
+6. pass add timestamp
 建立这个安全凭据表格是为了记录用户之前更改密码等等的操作记录，或者对于多种登陆方式的兼容。
+
+还有一个几乎相同的储存历史数据 User Credential History 的表格。
+User Credential History
+Same columns as User Credential with additional removed_at timestamp.
 
 用户登陆是一个日志类型的表格：
 
@@ -165,9 +169,8 @@ Tool Call History.
 Tool Info
 1. tool id
 2. tool name
-3. tool arguments (jsonb)
-4. tool description
-5. add timestamp
+3. tool definition (jsonb)
+4. add timestamp
 
 考虑到有的 Tool Call 会建立多个资源文件，所以这里需要一个表格记录，这个表格应该只会作为历史记录使用，在调用工具的时候就会把生成的资源加入 Chat Message 表格里，不会在之后经常查询这个表格。
 
