@@ -1,0 +1,309 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model audit_log {
+  log_id                                                 BigInt          @id
+  user_id                                                BigInt?
+  action_type                                            Int
+  target_type                                            Int
+  target_id                                              BigInt
+  occurred_at                                            DateTime        @default(now()) @db.Timestamptz(6)
+  details                                                Json?
+  type_value_info_audit_log_action_typeTotype_value_info type_value_info @relation("audit_log_action_typeTotype_value_info", fields: [action_type], references: [type_value], onDelete: SetNull, onUpdate: NoAction)
+  type_value_info_audit_log_target_typeTotype_value_info type_value_info @relation("audit_log_target_typeTotype_value_info", fields: [target_type], references: [type_value], onDelete: SetNull, onUpdate: NoAction)
+  user_info                                              user_info?      @relation(fields: [user_id], references: [user_id], onUpdate: NoAction)
+
+  @@index([action_type], map: "idx_audit_log_type")
+  @@index([user_id], map: "idx_audit_log_user")
+}
+
+model binary_object {
+  object_id         BigInt              @id
+  file_type         Int
+  file_size         BigInt
+  storage_path      String              @unique(map: "idx_binary_object_path")
+  mime_type         String
+  created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  type_value_info   type_value_info     @relation(fields: [file_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  chat_message      chat_message[]
+  llm_avatar_info   llm_avatar_info[]
+  llm_tool_artifact llm_tool_artifact[]
+  user_info         user_info[]
+
+  @@index([file_type], map: "idx_binary_object_type")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model chat_message {
+  message_id                                                 BigInt          @id
+  chat_id                                                    BigInt
+  message_index                                              Int
+  sender_type                                                Int
+  sender_id                                                  BigInt
+  message_type                                               Int
+  text_content                                               String?
+  has_binary                                                 Boolean         @default(false)
+  binary_object_id                                           BigInt?
+  binary_object_name                                         String?
+  is_hidden_user                                             Boolean         @default(false)
+  is_hidden_ai                                               Boolean         @default(false)
+  is_active                                                  Boolean         @default(true)
+  sent_at                                                    DateTime        @default(now()) @db.Timestamptz(6)
+  removed_at                                                 DateTime?       @db.Timestamptz(6)
+  binary_object                                              binary_object?  @relation(fields: [binary_object_id], references: [object_id], onUpdate: NoAction)
+  chat_session                                               chat_session    @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade, onUpdate: NoAction)
+  type_value_info_chat_message_message_typeTotype_value_info type_value_info @relation("chat_message_message_typeTotype_value_info", fields: [message_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  type_value_info_chat_message_sender_typeTotype_value_info  type_value_info @relation("chat_message_sender_typeTotype_value_info", fields: [sender_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  llm_tool_call                                              llm_tool_call[]
+
+  @@unique([chat_id, message_index], map: "idx_chat_message_chat")
+  @@index([binary_object_id], map: "idx_chat_message_object")
+  @@index([sender_type, sender_id], map: "idx_chat_message_sender")
+}
+
+model chat_session {
+  chat_id      BigInt         @id
+  user_id      BigInt
+  chat_name    String
+  is_active    Boolean        @default(true)
+  shared_at    DateTime       @default(now()) @db.Timestamptz(6)
+  removed_at   DateTime?      @db.Timestamptz(6)
+  chat_message chat_message[]
+  user_info    user_info      @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  chat_share   chat_share[]
+
+  @@index([user_id], map: "idx_chat_session_user")
+}
+
+model chat_share {
+  share_id       BigInt       @id
+  chat_id        BigInt
+  shared_user_id BigInt
+  is_active      Boolean      @default(true)
+  shared_at      DateTime     @default(now()) @db.Timestamptz(6)
+  removed_at     DateTime?    @db.Timestamptz(6)
+  chat_session   chat_session @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade, onUpdate: NoAction)
+  user_info      user_info    @relation(fields: [shared_user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([shared_user_id], map: "idx_chat_share_user")
+}
+
+model device_info {
+  device_id            BigInt                 @id
+  user_id              BigInt
+  device_type          Int
+  device_serial        String
+  registered_at        DateTime               @default(now()) @db.Timestamptz(6)
+  is_allowed           Boolean                @default(true)
+  type_value_info      type_value_info        @relation(fields: [device_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_info            user_info              @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  device_login_history device_login_history[]
+  device_registration  device_registration[]
+
+  @@unique([device_serial, device_id, is_allowed], map: "idx_device_info_active")
+  @@index([user_id], map: "idx_device_info_user")
+}
+
+model device_info_history {
+  device_id       BigInt          @id
+  user_id         BigInt
+  device_type     Int
+  device_serial   String
+  registered_at   DateTime        @default(now()) @db.Timestamptz(6)
+  removed_at      DateTime?       @db.Timestamptz(6)
+  type_value_info type_value_info @relation(fields: [device_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_info       user_info       @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model device_login_history {
+  login_activity_id BigInt       @id
+  device_id         BigInt?
+  login_from_ip     String
+  login_server_id   Int
+  login_at          DateTime     @default(now()) @db.Timestamptz(6)
+  is_success        Boolean      @default(true)
+  device_info       device_info? @relation(fields: [device_id], references: [device_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([device_id], map: "idx_deivce_login_id")
+}
+
+model device_registration {
+  registration_id   BigInt       @id
+  device_id         BigInt?
+  device_serial     String
+  registration_code String
+  registered_at     DateTime     @default(now()) @db.Timestamptz(6)
+  valid_until       DateTime     @default(dbgenerated("(now() + '01:00:00'::interval)")) @db.Timestamptz(6)
+  is_used           Boolean      @default(false)
+  device_info       device_info? @relation(fields: [device_id], references: [device_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([registration_code], map: "idx_device_registration_code")
+  @@index([device_serial], map: "idx_device_registration_serial")
+}
+
+model llm_avatar_info {
+  avatar_id                                                          BigInt             @id
+  avatar_name                                                        String
+  owner_user_id                                                      BigInt
+  pinned_prompt                                                      String?
+  first_message                                                      String?
+  avatar_image_id                                                    BigInt?
+  llm_provider_enum                                                  Int
+  llm_model_name                                                     String
+  llm_model_args                                                     Json
+  tts_provider_enum                                                  Int
+  tts_voice_name                                                     String
+  tts_model_args                                                     Json
+  is_public                                                          Boolean            @default(false)
+  is_active                                                          Boolean            @default(true)
+  created_at                                                         DateTime           @default(now()) @db.Timestamptz(6)
+  removed_at                                                         DateTime?          @db.Timestamptz(6)
+  binary_object                                                      binary_object?     @relation(fields: [avatar_image_id], references: [object_id], onUpdate: NoAction)
+  type_value_info_llm_avatar_info_llm_provider_enumTotype_value_info type_value_info    @relation("llm_avatar_info_llm_provider_enumTotype_value_info", fields: [llm_provider_enum], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_info                                                          user_info          @relation(fields: [owner_user_id], references: [user_id], onDelete: SetNull, onUpdate: NoAction)
+  type_value_info_llm_avatar_info_tts_provider_enumTotype_value_info type_value_info    @relation("llm_avatar_info_tts_provider_enumTotype_value_info", fields: [tts_provider_enum], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  llm_avatar_share                                                   llm_avatar_share[]
+
+  @@index([owner_user_id], map: "idx_avatar_info_owner")
+  @@index([is_public], map: "idx_avatar_info_public")
+}
+
+model llm_avatar_share {
+  share_id        BigInt          @id
+  avatar_id       BigInt
+  shared_user_id  BigInt
+  is_active       Boolean         @default(true)
+  shared_at       DateTime        @default(now()) @db.Timestamptz(6)
+  removed_at      DateTime?       @db.Timestamptz(6)
+  llm_avatar_info llm_avatar_info @relation(fields: [avatar_id], references: [avatar_id], onDelete: Cascade, onUpdate: NoAction)
+  user_info       user_info       @relation(fields: [shared_user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([shared_user_id], map: "idx_avatar_share_user")
+}
+
+model llm_tool_artifact {
+  entry_id      BigInt         @id
+  call_id       BigInt?
+  artifact_id   BigInt?
+  artifact_name String
+  is_input      Boolean        @default(false)
+  binary_object binary_object? @relation(fields: [artifact_id], references: [object_id], onDelete: Cascade, onUpdate: NoAction)
+  llm_tool_call llm_tool_call? @relation(fields: [call_id], references: [call_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([call_id, artifact_id], map: "idx_tool_artifact_call")
+  @@index([artifact_id], map: "idx_tool_artifact_id")
+}
+
+model llm_tool_call {
+  call_id           BigInt              @id
+  message_id        BigInt
+  tool_id           BigInt
+  arguments         Json?
+  response          Json?
+  called_at         DateTime            @default(now()) @db.Timestamptz(6)
+  llm_tool_artifact llm_tool_artifact[]
+  chat_message      chat_message        @relation(fields: [message_id], references: [message_id], onDelete: Cascade, onUpdate: NoAction)
+  llm_tool_info     llm_tool_info       @relation(fields: [tool_id], references: [tool_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([message_id], map: "idx_tool_call_message")
+  @@index([tool_id], map: "idx_tool_call_tool")
+}
+
+model llm_tool_info {
+  tool_id         BigInt          @id
+  tool_type       Int
+  tool_name       String          @unique(map: "idx_tool_info_name")
+  tool_definition Json
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  llm_tool_call   llm_tool_call[]
+  type_value_info type_value_info @relation(fields: [tool_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tool_type], map: "idx_tool_info_type")
+}
+
+model type_value_info {
+  type_value                                                         Int                       @id
+  type_name                                                          String
+  type_meaning                                                       String
+  audit_log_audit_log_action_typeTotype_value_info                   audit_log[]               @relation("audit_log_action_typeTotype_value_info")
+  audit_log_audit_log_target_typeTotype_value_info                   audit_log[]               @relation("audit_log_target_typeTotype_value_info")
+  binary_object                                                      binary_object[]
+  chat_message_chat_message_message_typeTotype_value_info            chat_message[]            @relation("chat_message_message_typeTotype_value_info")
+  chat_message_chat_message_sender_typeTotype_value_info             chat_message[]            @relation("chat_message_sender_typeTotype_value_info")
+  device_info                                                        device_info[]
+  device_info_history                                                device_info_history[]
+  llm_avatar_info_llm_avatar_info_llm_provider_enumTotype_value_info llm_avatar_info[]         @relation("llm_avatar_info_llm_provider_enumTotype_value_info")
+  llm_avatar_info_llm_avatar_info_tts_provider_enumTotype_value_info llm_avatar_info[]         @relation("llm_avatar_info_tts_provider_enumTotype_value_info")
+  llm_tool_info                                                      llm_tool_info[]
+  user_credential                                                    user_credential[]
+  user_credential_history                                            user_credential_history[]
+  user_info                                                          user_info[]
+}
+
+model user_credential {
+  pass_id         BigInt          @id
+  user_id         BigInt?
+  pass_type       Int
+  pass_value      String?
+  pass_salt       String?
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  type_value_info type_value_info @relation(fields: [pass_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_info       user_info?      @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, pass_type], map: "idx_user_credential_user_pass")
+  @@index([user_id], map: "idx_user_credential_user")
+}
+
+model user_credential_history {
+  pass_id         BigInt          @id
+  user_id         BigInt?
+  pass_type       Int
+  pass_value      String?
+  pass_salt       String?
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  removed_at      DateTime?       @db.Timestamptz(6)
+  type_value_info type_value_info @relation(fields: [pass_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_info       user_info?      @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model user_info {
+  user_id                 BigInt                    @id
+  user_name               String                    @unique(map: "idx_user_info_name")
+  user_type               Int
+  user_email              String                    @unique(map: "idx_user_info_email")
+  user_locale             String
+  user_avatar_id          BigInt?
+  user_description        String?
+  is_allowed              Boolean                   @default(true)
+  audit_log               audit_log[]
+  chat_session            chat_session[]
+  chat_share              chat_share[]
+  device_info             device_info[]
+  device_info_history     device_info_history[]
+  llm_avatar_info         llm_avatar_info[]
+  llm_avatar_share        llm_avatar_share[]
+  user_credential         user_credential[]
+  user_credential_history user_credential_history[]
+  binary_object           binary_object?            @relation(fields: [user_avatar_id], references: [object_id], onUpdate: NoAction)
+  type_value_info         type_value_info           @relation(fields: [user_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
+  user_login_history      user_login_history[]
+}
+
+model user_login_history {
+  login_activity_id BigInt     @id
+  user_id           BigInt?
+  login_from_ip     String
+  login_server_id   Int
+  login_at          DateTime   @default(now()) @db.Timestamptz(6)
+  is_success        Boolean    @default(true)
+  user_info         user_info? @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_user_login_id")
+}
