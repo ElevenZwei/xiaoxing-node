@@ -6,6 +6,6 @@ const db = {
     },
   },
 };
-console.log('Database configuration:', db);
+// console.log('Database configuration:', db);
 export default db;
 

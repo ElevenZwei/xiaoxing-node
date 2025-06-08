@@ -4,3 +4,4 @@
 001_create_basic_table 2025-06-08T08:42:41Z USER <USER@SERVER> # Create fundamental tables.
 002_create_user_table 2025-06-08T08:44:28Z USER <USER@SERVER> # Create user tables.
 003_create_chat_table 2025-06-08T08:44:53Z USER <USER@SERVER> # Create chat tables.
+004_insert_basic_data 2025-06-08T17:03:49Z USER <USER@SERVER> # Insert basic data.
