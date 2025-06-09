@@ -115,6 +115,7 @@ create table device_registration(
     -- 设备序列号，通常是设备的唯一标识符，例如 ESP32 EFUSE ID。
     device_serial       text not null,
     registration_code   text not null,
+    registration_from_ip text not null,
     registered_at       timestamptz not null default now(),
     valid_until         timestamptz not null default now() + interval '1 hour',
     is_used             boolean not null default false
@@ -129,7 +130,7 @@ create table chat_session (
     user_id             bigint not null references user_info(user_id) on delete cascade,
     chat_name           text not null,
     is_active           boolean not null default true,
-    shared_at           timestamptz not null default now(),
+    created_at          timestamptz not null default now(),
     removed_at          timestamptz
 );
 create index idx_chat_session_user on chat_session(user_id);
