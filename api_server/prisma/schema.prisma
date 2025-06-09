@@ -73,7 +73,7 @@ model chat_session {
   user_id      BigInt
   chat_name    String
   is_active    Boolean        @default(true)
-  shared_at    DateTime       @default(now()) @db.Timestamptz(6)
+  created_at   DateTime       @default(now()) @db.Timestamptz(6)
   removed_at   DateTime?      @db.Timestamptz(6)
   chat_message chat_message[]
   user_info    user_info      @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
@@ -135,14 +135,15 @@ model device_login_history {
 }
 
 model device_registration {
-  registration_id   BigInt       @id
-  device_id         BigInt?
-  device_serial     String
-  registration_code String
-  registered_at     DateTime     @default(now()) @db.Timestamptz(6)
-  valid_until       DateTime     @default(dbgenerated("(now() + '01:00:00'::interval)")) @db.Timestamptz(6)
-  is_used           Boolean      @default(false)
-  device_info       device_info? @relation(fields: [device_id], references: [device_id], onDelete: Cascade, onUpdate: NoAction)
+  registration_id      BigInt       @id
+  device_id            BigInt?
+  device_serial        String
+  registration_code    String
+  registration_from_ip String
+  registered_at        DateTime     @default(now()) @db.Timestamptz(6)
+  valid_until          DateTime     @default(dbgenerated("(now() + '01:00:00'::interval)")) @db.Timestamptz(6)
+  is_used              Boolean      @default(false)
+  device_info          device_info? @relation(fields: [device_id], references: [device_id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([registration_code], map: "idx_device_registration_code")
   @@index([device_serial], map: "idx_device_registration_serial")
