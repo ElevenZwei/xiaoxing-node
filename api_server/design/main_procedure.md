@@ -200,8 +200,8 @@ TTS 合成出来无论是什么格式的数据，都要转成 Opus Frame 数据�
 
 # Errata
 这里记录一下流程设计过程里面发现的数据库错误。之后集中修复。
-`device_registration` 表格需要 `registration_from_ip text` 字段。
-`chat_session` 表格里面的 `shared_at` 字段命名应该是 `created_at` 。
+fixed - `device_registration` 表格需要 `registration_from_ip text` 字段。
+fixed - `chat_session` 表格里面的 `shared_at` 字段命名应该是 `created_at` 。
 
 
 

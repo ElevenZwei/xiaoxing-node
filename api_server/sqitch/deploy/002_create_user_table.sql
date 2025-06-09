@@ -97,6 +97,7 @@ create table device_registration(
     -- 设备序列号，通常是设备的唯一标识符，例如 ESP32 EFUSE ID。
     device_serial       text not null,
     registration_code   text not null,
+    registration_from_ip text not null,
     registered_at       timestamptz not null default now(),
     valid_until         timestamptz not null default now() + interval '1 hour',
     is_used             boolean not null default false
