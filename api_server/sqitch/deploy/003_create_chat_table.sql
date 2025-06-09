@@ -8,7 +8,7 @@ create table chat_session (
     user_id             bigint not null references user_info(user_id) on delete cascade,
     chat_name           text not null,
     is_active           boolean not null default true,
-    shared_at           timestamptz not null default now(),
+    created_at          timestamptz not null default now(),
     removed_at          timestamptz
 );
 create index idx_chat_session_user on chat_session(user_id);
