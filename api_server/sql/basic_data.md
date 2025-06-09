@@ -58,6 +58,7 @@ Type Value Table 有三个字段 value, name, meaning。
 0x4001,  'UserMessage',     '用户发送的消息'
 0x4002,  'AIMessage',       'AI 发送的消息'
 0x4003,  'ToolMessage',     '工具调用返回的消息'
+0x4004,  'HiddenMessage',   '看不到的消息'
 
 0x4101,  'ToolRequest',     '消息类型是工具调用申请'
 0x4102,  'ToolResponse',    '消息类型是工具调用回复'
