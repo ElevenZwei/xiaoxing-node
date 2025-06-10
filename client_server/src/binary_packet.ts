@@ -71,13 +71,13 @@ export class Snowflake {
     return (now << 22n) | (this.machineId << 12n) | this.lastSequence;
   }
 
-  static parse(id: bigint): { timestamp: bigint, machineId: bigint, sequence: bigint } {
+  static parse(id: bigint): { timestamp: bigint, machineId: number, sequence: number } {
     const timestamp = (id >> 22n) + Snowflake.EPOCH_FROM; // 获取时间戳并加上 EPOCH_FROM
-    const machineId = (id >> 12n) & 0x3FFn; // 假设机器 ID 占 10 位
-    const sequence = id & 0xFFFn; // 序列号占 12 位
+    const machineId = Number((id >> 12n) & 0x3FFn); // 假设机器 ID 占 10 位
+    const sequence = Number(id & 0xFFFn); // 序列号占 12 位
     return { timestamp, machineId, sequence };
   }
-  static parseToReadable(id: bigint): { timestamp: Date, machineId: bigint, sequence: bigint } {
+  static parseToReadable(id: bigint): { timestamp: Date, machineId: number, sequence: number } {
     const parsed = Snowflake.parse(id);
     return {
       timestamp: new Date(Number(parsed.timestamp)),

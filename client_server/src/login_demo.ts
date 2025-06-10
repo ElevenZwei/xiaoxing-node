@@ -34,7 +34,7 @@ import { Router } from 'express';
  * {
  *  "websocket": {
  *   "url": "ws://example.com/ws",
- *   "token": <string>,
+ *   "token": <string>, // use JWT token containing user id.
  *  },
  *  "server_time": {
  *   "timestamp": 1700000000,

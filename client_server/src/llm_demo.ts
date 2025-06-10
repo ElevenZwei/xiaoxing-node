@@ -38,11 +38,19 @@ export enum LLMRole {
   AI = 'assistant',
 };
 
-export type LLMMsg = OpenAI.Chat.ChatCompletionMessageParam;
+// LLMMsg 是 LLM 消息的类型定义，包含了系统消息、AI 消息、用户消息和工具调用消息。
+// 在 OpenAI 的 ChatCompletionMessageParam 里面略微缩小了范围。
+export type LLMMsg =
+  OpenAI.Chat.ChatCompletionSystemMessageParam
+  | OpenAI.Chat.ChatCompletionAssistantMessageParam
+  | { role: 'user', content: string, name?: string }
+  | { role: 'tool', content: string, tool_call_id: string, };
+export type LLMRequest = OpenAI.Chat.ChatCompletionMessageParam;
 export type LLMResponse = OpenAI.Chat.ChatCompletionMessage;
 export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => boolean;
 export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
 export type OnDeltaHookFunction = (content: string) => void;
+
 export class LLMHelper {
   api: OpenAI;
   apiModelName: string;
@@ -172,8 +180,10 @@ export class LLMHelper {
       if (counter > 10) {
         throw new Error(`too many tool calls, cnt=${counter}, last_call=${toolCallStr}`);
       }
+      // 在调用工具之前，先记录 AI 的调用请求。
+      this.addMessage(message);
 
-      const toolMsgs: OpenAI.Chat.ChatCompletionToolMessageParam[] = [];
+      const toolMsgs: LLMMsg[] = [];
       const jobs = toolCalls.map(async (tc: OpenAI.Chat.ChatCompletionMessageToolCall) => {
         const toolName = tc.function.name;
         if (this.toolCallHook !== undefined && this.toolCallHook(tc) === false) {
@@ -199,8 +209,8 @@ export class LLMHelper {
       });
       // 工具调用中的 Error 会向上抛出，由调用者处理要不要给 AI 一个文字回复。
       await Promise.all(jobs);
-      // 仅当工具成功调用的时候才记录 AI 给出的工具调用和调用结果的消息。
-      this.addMessage(message);
+      // 仅当工具成功调用的时候记录 调用结果的消息。
+      // TODO: 这里可以考虑分开处理，有的工具调用可能会失败，失败也会需要告知 LLM 。
       toolMsgs.forEach(msg => this.addMessage(msg));
       // 等待下一次回复
       message = await this.nextResponse(undefined, undefined);
@@ -219,7 +229,7 @@ export class LLMHelper {
         this.systemPrompt === undefined ? [] : [
             { role: 'system', content: this.systemPrompt }
         ];
-    const nextMsg: OpenAI.Chat.ChatCompletionMessageParam[] = 
+    const nextMsg: LLMMsg[] = 
         (role === undefined || content === undefined) ? [] : [
             role === LLMRole.Tool
                 ? { role, content, tool_call_id: toolCallId as string }
@@ -280,7 +290,7 @@ export class LLMHelper {
     };
     return res;
   }
-  
+
   private updateApiTools() {
     this.apiTools = Object.values(this.toolMap).map(item => item.tool);
   }
