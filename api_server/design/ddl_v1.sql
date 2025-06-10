@@ -5,7 +5,8 @@
 create table type_value_info (
     type_value          integer primary key,
     type_name           text not null,
-    type_meaning        text not null
+    type_meaning        text not null,
+    mime_type           text -- 可选，表示 MIME 类型
 );
 
 -- 二进制对象存储表
@@ -14,7 +15,6 @@ create table binary_object (
     file_type           integer not null references type_value_info(type_value),
     file_size           bigint not null,
     storage_path        text not null,
-    mime_type           text not null,
     created_at          timestamptz not null default now()
 );
 create unique index idx_binary_object_path on binary_object(storage_path);

@@ -2,15 +2,19 @@
 
 BEGIN;
 
+INSERT INTO type_value_info(type_value, type_name, type_meaning, mime_type) VALUES
+(0x1,     'RawText',              '表示纯文本消息', 'text/plain'),
+
+(0x10,    'AudioOpus',            'Ogg 音频文件类型', 'audio/ogg'),
+(0x11,    'AudioOpusFrame',       'Opus 音频帧二进制数据，不能直接储存', null),
+(0x12,    'AudioWav',             'Wav 音频文件类型', 'audio/wav'),
+
+(0x20,    'ImageJpeg',            'Jpeg 图片文件类型', 'image/jpeg');
+
+
+
 INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 (0x0,     'Unknown',              '未知类型'),
-(0x1,     'RawText',              '表示纯文本消息'),
-
-(0x10,    'AudioOpus',            'Ogg 音频文件类型'),
-(0x11,    'AudioOpusFrame',       'Opus 音频帧二进制数据，不能直接储存'),
-(0x12,    'AudioWav',             'Wav 音频文件类型'),
-
-(0x20,    'ImageJpeg',            'Jpeg 图片文件类型'),
 
 (0x2001,  'SuperUser',            '超级用户'),
 (0x2002,  'AdminUser',            '管理员用户，可以改变其他用户的类型'),

@@ -19,6 +19,7 @@ Esp 服务器返回 `{ action='focus_chat', chat_id = <input>, chat_name='New Ch
 占位之后在第一个录音的时候肯定会新建对话的。
 Esp 服务器调用 `user_create_chat(user_id, chat_id, prefix=<string>)` 
 这个表格上其实没有 `unique(user_id, chat_name)` 要求。
+但是我们尽量让他不冲突。
 Api 服务器需要查询一下这个用户名下的所有 Chat Name，
 看一下 `<prefix><number increment>` 的名字哪一个没有被占用。
 然后立刻插入一个新的 chat session 数据行。
