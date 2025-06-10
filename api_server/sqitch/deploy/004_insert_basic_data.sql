@@ -3,7 +3,8 @@
 BEGIN;
 
 INSERT INTO type_value_info(type_value, type_name, type_meaning, mime_type) VALUES
-(0x1,     'RawText',              '表示纯文本消息', 'text/plain'),
+(0x1,     'TextPlain',             '表示纯文本消息', 'text/plain'),
+(0x2,     'TextJson',              '表示 JSON 文本', 'application/json'),
 
 (0x10,    'AudioOpus',            'Ogg 音频文件类型', 'audio/ogg'),
 (0x11,    'AudioOpusFrame',       'Opus 音频帧二进制数据，不能直接储存', null),
@@ -46,7 +47,8 @@ INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 对应的十进制版本如下：
 INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 (0,       'Unknown',              '未知类型'),
-(1,       'RawText',              '表示纯文本消息'),
+(1,       'TextPlain',            '表示纯文本消息'),
+(2,       'TextJson',             '表示 JSON 文本'),
 
 (16,      'AudioOpus',            'Ogg 音频文件类型'),
 (17,      'AudioOpusFrame',       'Opus 音频帧二进制数据，不能直接储存'),

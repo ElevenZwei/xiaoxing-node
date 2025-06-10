@@ -22,6 +22,8 @@ drop table if exists llm_tool_info;
 
 -- 聊天内容表
 drop table if exists chat_message;
+drop function if exists chat_message_tsvector_trigger();
+drop function if exists chat_message_index_trigger();
 
 -- 聊天信息分享表
 drop table if exists chat_share;
