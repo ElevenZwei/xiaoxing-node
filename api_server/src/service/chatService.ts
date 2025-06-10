@@ -47,7 +47,7 @@ export async function removeChatSession(chatId: bigint) {
   });
 }
 
-export async function userCreateChat(chatId: bigint, userId: bigint, prefix: string) {
+export async function userCreateChat(userId: bigint, chatId: bigint, prefix: string) {
   // select all chat names of user of prefix
   const existingChats = await prisma.chat_session.findMany({
     select: { chat_name: true },
@@ -65,13 +65,23 @@ export async function userCreateChat(chatId: bigint, userId: bigint, prefix: str
     index++;
   }
   const chatName = prefix + index.toString();
-  return prisma.chat_session.create({
+  const line = await prisma.chat_session.create({
     data: {
       chat_id: chatId,
       user_id: userId,
       chat_name: chatName,
     },
   });
+  if (!line) {
+    throw new Error('Failed to create chat session');
+  }
+  return {
+    chat_id: chatId,
+    user_id: userId,
+    chat_name: line.chat_name,
+    created_at: line.created_at,
+    last_message_index: 0 ,
+  };
 }
 
 export async function userCanReadChat(userId: bigint, chatId: bigint) {
