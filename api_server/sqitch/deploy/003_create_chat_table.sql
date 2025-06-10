@@ -36,6 +36,7 @@ create table chat_message (
     -- 消息类型，可能是文本、图片、音频、还有 LLM 过程中的辅助消息例如 Tool Request 等。
     message_type        integer not null references type_value_info(type_value),
     text_content        text,
+    text_content_tsv    tsvector, -- 用于全文搜索的文本内容向量
     has_binary          boolean not null default false,
     binary_object_id    bigint references binary_object(object_id) on delete set null,
     binary_object_name  text,
@@ -48,8 +49,47 @@ create table chat_message (
 create unique index idx_chat_message_chat on chat_message(chat_id, message_index);
 create index idx_chat_message_sender on chat_message(sender_type, sender_id);
 create index idx_chat_message_object on chat_message(binary_object_id);
-create index idx_chat_message_fulltext on chat_message using gin(to_tsvector('simple', text_content));
+create index idx_chat_message_fulltext on chat_message using gin(text_content_tsv);
 
+-- 创建触发器函数，用于在插入或更新时自动更新全文搜索向量
+create function chat_message_tsvector_trigger() returns trigger as $$
+begin
+    new.text_content_tsv := to_tsvector('simple', new.text_content);
+    return new;
+end;
+$$ language plpgsql;
+create trigger trg_chat_message_tsvector
+    before insert or update on chat_message
+    for each row execute function chat_message_tsvector_trigger();
+
+-- 创建触发器函数，设置自增的 message_index，确保 unique(chat_id, message_index) 唯一性约束。
+create function chat_message_index_trigger() returns trigger as $$
+begin
+    if new.message_index is null then
+        begin
+            -- lock the row with given chat_id and max message_index,
+            -- to ensure no concurrent inserts can cause duplicate message_index.
+            select message_index into strict new.message_index
+            from chat_message
+            where chat_id = new.chat_id
+            order by message_index desc
+            limit 1 for update;
+            new.message_index := new.message_index + 1;
+
+            -- if not found, set to 1.
+            exception when no_data_found then
+                new.message_index := 1;
+        end;
+    end if;
+    return new;
+end;
+$$ language plpgsql;
+create trigger trg_chat_message_index
+    before insert on chat_message
+    for each row execute function chat_message_index_trigger();
+
+
+-- LLM 工具信息表
 create table llm_tool_info (
     tool_id            bigint primary key,
     tool_type          integer not null references type_value_info(type_value),
