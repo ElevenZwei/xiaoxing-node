@@ -53,10 +53,7 @@ Esp 服务器需要生成真正的 Id，然后给客户端消息。
 这里使用一次下面说的消息推送过程。
 
 这一段和等待 LLM 回复并行。
-Esp 服务器随后上传录音，获得 Binary object id。
-`post binary_object(object_id, file_type, file_size, file_save_name) with buffer`.
-在 Api 服务器内部这个接口叫做 `new_binary_object_with_data` 。
-Esp 服务器随后调用新建消息的 api 。
+Esp 服务器首先调用新建消息的 api 。
 `post chat_message() with json {chat_id, message_id, user_id, ...}`
 这个 Api 需要输入一整个可以 `insert into chat_message` 的内容，但是不包括 `message_index`。
 `message_index` 由 Api 服务器内部防撞得出。
@@ -64,13 +61,15 @@ Esp 服务器随后调用新建消息的 api 。
 返回 `{chat_id, message_id, message_index}`.
 Esp 服务器会比较 `message_index` 如果自己有遗漏，那么拉取范围，和打开对话的操作一样。
 同时 Esp 服务器把对应的数据推送给用户设备 `update_last_message` 。
+Esp 服务器随后上传录音。
+`post binary_object_for_text(object_id, file_type, file_size, file_save_name) with buffer`.
 
 
 ## Esp 服务器的消息推送
 推送消息的格式按照 `main_procedure.md` 里面所说。
 `{ type='message', state='new', chat_id=string, message_id=string, role='user|ai', message_type=0x1, content }`
 如果是增量推送，那么只能是文本消息。
-`{ type='message', state='delta', chat_id, message_id, chunk_id, role, delta }`
+`{ type='message', state='delta', chat_id, message_id, chunk_index=number from 1, role, delta }`
 增量推送完成之后还要重复一下 `new_message` 的推送。
 
 推送消息数量更新的方法是。
@@ -86,9 +85,6 @@ Esp 服务器会比较 `message_index` 如果自己有遗漏，那么拉取范�
 如果类型是文本，需要找到对应 `message_id` 的消息起泡然后追加或者更新文本。
 
 ## 收到 `update_last_message` 。
-
-
-
 
 
 
