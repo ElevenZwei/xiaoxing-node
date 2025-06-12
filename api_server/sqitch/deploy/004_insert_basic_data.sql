@@ -32,7 +32,8 @@ INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 (0x4001,  'UserMessage',          '用户发送的消息'),
 (0x4002,  'AIMessage',            'AI 发送的消息'),
 (0x4003,  'ToolMessage',          '工具调用返回的消息'),
-(0x4004,  'HiddenMessage',        '隐藏消息，通常是系统消息，不会显示在聊天记录中'),
+(0x4004,  'SystemMessage',        '系统背景消息'),
+(0x4020,  'HiddenMessage',        '隐藏消息，不会显示在聊天记录中'),
 
 (0x4101,  'ToolRequest',          '消息类型是工具调用申请'),
 (0x4102,  'ToolResponse',         '消息类型是工具调用回复'),
@@ -71,7 +72,8 @@ INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 (16385,   'UserMessage',          '用户发送的消息'),
 (16386,   'AIMessage',            'AI 发送的消息'),
 (16387,   'ToolMessage',          '工具调用返回的消息'),
-(16388,   'HiddenMessage',        '隐藏消息，通常是系统消息，不会显示在聊天记录中'),
+(16388,   'SystemMessage',        '系统背景消息'),
+(16416,   'HiddenMessage',        '隐藏消息，通常是系统消息，不会显示在聊天记录中'),
 
 (16641,   'ToolRequest',          '消息类型是工具调用申请'),
 (16642,   'ToolResponse',         '消息类型是工具调用回复'),

@@ -90,12 +90,6 @@ Esp 服务器需要识别这个特殊值，生成真正的 Id 标记这段录音
 Esp 服务器给客户端反馈 STT 结果的时候需要包含 `chat_id`, `message_id` 。
 然后 Esp 服务器再去执行后面这些比较麻烦的数据储存工作。
 
-### (Optional) 服务器上传录音
-Esp 服务器把录音以 Ogg File 格式压在内存里面，
-然后调用 Api 服务器的 `new_binary_object_with_data` Api 上传数据。
-这个上传数据的过程不必等到 Api 服务器回复。大不了异步重试。
-总之在上传之前就有了 binary object id ，之后可以用来引用这个录音。
-
 ## Esp 提交消息
 Esp 服务器向 Api 服务器提交 `new_chat_message` Api 。
 这里需要 `chat_id`, `message_id`, `sender_type`, `user_id` 等等很多数据。
@@ -111,6 +105,11 @@ Esp 服务器应当把更新 `message_index` 的消息告知客户端。
 `update_last_message(chat_id, message_id, message_index);`
 如果客户端发现这些最新的消息自己没有记录，那么客户端应该选择拉取消息。
 
+### (Optional) 服务器上传录音
+Esp 服务器把录音以 Ogg File 格式压在内存里面，
+然后调用 Api 服务器的 `new_binary_object_with_data` Api 上传数据。
+这个上传数据的过程不必等到 Api 服务器回复。大不了异步重试。
+总之在上传之前就有了 binary object id ，之后可以用来引用这个录音。
 
 # Esp 服务器产生 LLM 消息
 Esp 服务器和 LLM 通信之后产生 Delta 流式文本。
