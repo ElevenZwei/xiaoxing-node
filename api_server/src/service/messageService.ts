@@ -12,9 +12,9 @@ export type NewTextMessageInput = {
   senderType: number;
   senderId: bigint;
   content: string;
-  withAudio: boolean;
 };
 export async function insertTextMessage(input: NewTextMessageInput) {
+  // TODO: insert or update the chat message
   return prisma.chat_message.create({
     data: {
       message_id: input.messageId,
@@ -23,8 +23,6 @@ export async function insertTextMessage(input: NewTextMessageInput) {
       sender_id: input.senderId,
       message_type: 0x1, // 0x01 for text message
       text_content: input.content,
-      has_binary: input.withAudio,
-      binary_object_id: input.withAudio ? input.messageId : null,
     },
   });
 }

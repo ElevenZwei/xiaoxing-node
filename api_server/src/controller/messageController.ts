@@ -9,7 +9,6 @@ import * as MessageService from '../service/messageService';
       sender_type: input.senderType,
       sender_id: input.senderId.toString(),
       content: input.content,
-      with_audio: input.withAudio,
     })
  * Output format:
     {
@@ -29,8 +28,7 @@ export async function newTextMessage(req: Request, res: Response): Promise<void>
       typeof req.body.chat_id !== 'string' ||
       typeof req.body.sender_type !== 'number' ||
       typeof req.body.sender_id !== 'string' ||
-      typeof req.body.content !== 'string' ||
-      typeof req.body.with_audio !== 'boolean') {
+      typeof req.body.content !== 'string') {
     res.status(400).json({ success: false, error: 'Invalid input data' });
     return;
   }
@@ -40,7 +38,6 @@ export async function newTextMessage(req: Request, res: Response): Promise<void>
     senderType: req.body.sender_type,
     senderId: BigInt(req.body.sender_id),
     content: req.body.content,
-    withAudio: req.body.with_audio,
   };
   if (input.content.length === 0) {
     res.status(400).json({ success: false, error: 'Content cannot be empty' });
