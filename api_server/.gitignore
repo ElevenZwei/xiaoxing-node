@@ -13,6 +13,7 @@
 node_modules/
 .pnp.*
 dist/
+data/
 
 # Prisma
 /generated/prisma
