@@ -5,7 +5,7 @@ import fs from 'fs';
 import yaml from 'yaml'
 import path from 'path'
 
-const keyPath = path.resolve(__dirname, '../config/key.yaml');
+const keyPath = path.resolve(__dirname, '../../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');
 const keyYaml = yaml.parse(keyFile);
 const keyVolc = keyYaml.tts.volcano;
@@ -38,7 +38,6 @@ const requestJson = {
   request: {
     reqid: 'xxx',
     text: '字节跳动语音合成。',
-    // text_type: 'plain',
     operation: 'xxx'
   }
 };
@@ -66,8 +65,6 @@ async function sendRequest(operation: 'submit' | 'query', filename: string) {
 
   const fileStream = fs.createWriteStream(filename);
 
-  ws.binaryType = 'arraybuffer';
-
   ws.on('open', () => {
     console.log(`Sending ${operation} request...`);
     ws.send(fullRequest);
@@ -78,7 +75,7 @@ async function sendRequest(operation: 'submit' | 'query', filename: string) {
       console.error(`should not recv text data: ${data.toString()}`);
       return;
     }
-    const buffer = Buffer.from(data as ArrayBuffer);
+    const buffer = data as Buffer;
     const done = parseResponse(buffer, fileStream);
     if (done) {
       console.log('Closing WebSocket connection...');

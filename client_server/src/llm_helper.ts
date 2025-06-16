@@ -24,11 +24,13 @@ function getLLMOption(provider: LLMProvider): ClientOptions {
   throw new Error(`unknown provider, ${provider}`);
 }
 
-export type LLMToolFunction = (args: Record<string, unknown>) => string | Promise<string>;
+export type LLMToolPrompt = OpenAI.ChatCompletionTool;
+export type LLMToolFunctionArgs = Record<string, unknown>;
+export type LLMToolFunction = (args: LLMToolFunctionArgs) => string | Promise<string>;
 export interface LLMTool {
   name: string;
-  tool: OpenAI.ChatCompletionTool;
-  callback: LLMToolFunction;
+  prompt: LLMToolPrompt;
+  code: LLMToolFunction;
 };
 
 export enum LLMRole {
@@ -49,7 +51,7 @@ export type LLMRequest = OpenAI.Chat.ChatCompletionMessageParam;
 export type LLMResponse = OpenAI.Chat.ChatCompletionMessage;
 export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => boolean;
 export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
-export type OnDeltaHookFunction = (content: string) => void;
+export type OnDeltaHookFunction = (content: string | null) => void;
 
 export class LLMHelper {
   api: OpenAI;
@@ -108,6 +110,12 @@ export class LLMHelper {
   }
 
   // 可以用这个函数获取流式文本内容的输出。
+  // Delta 内容会在每次有新的内容时调用一次。
+  // 最后一次调用会传入 null，表示流式输出结束。
+  // 这个 null 回调一定会在 AI 的每一条回复触发 addMessageHook 之前触发。
+  // 并且保证 null 回调之后一定会触发 addMessageHook。
+  // 但不是每个 addMessageHook 事件之前都有 onDeltaHook 事件。
+  // 例如用户的输入或者工具的输出不会触发 onDeltaHook。
   setOnDeltaHook(hook: OnDeltaHookFunction | undefined) {
     this.onDeltaHook = hook;
   }
@@ -154,7 +162,6 @@ export class LLMHelper {
     this.checkMessageLimit();
     const firstMessage = await this.nextResponse(LLMRole.User, content);
     const message = await this.handlePotentialToolCall(firstMessage);
-    this.addMessage(message);
     return message.content;
   }
 
@@ -180,23 +187,22 @@ export class LLMHelper {
       if (counter > 10) {
         throw new Error(`too many tool calls, cnt=${counter}, last_call=${toolCallStr}`);
       }
-      // 在调用工具之前，先记录 AI 的调用请求。
-      this.addMessage(message);
-
       const toolMsgs: LLMMsg[] = [];
       const jobs = toolCalls.map(async (tc: OpenAI.Chat.ChatCompletionMessageToolCall) => {
         const toolName = tc.function.name;
         if (this.toolCallHook !== undefined && this.toolCallHook(tc) === false) {
           throw new Error(`tool call interrupted by hook: name=${toolName}`);
         }
-        const toolFunc = this.toolMap[toolName]?.callback;
+        const toolFunc = this.toolMap[toolName]?.code;
         if (toolFunc == null) {
           throw new Error(`tool not found: name=${toolName}`);
         }
         const args = tc.function.arguments;
         const toolArgs = JSON.parse(args);
         try {
+          console.log(`calling tool: name=${toolName}, args=${args}`);
           const toolResult: string = await toolFunc(toolArgs);
+          console.log(`tool call result: name=${toolName}, result=${toolResult}`);
           toolMsgs.push({
             role: LLMRole.Tool,
             tool_call_id: tc.id,
@@ -281,6 +287,10 @@ export class LLMHelper {
         resRefusal += delta.refusal;
       }
     }
+    if (this.onDeltaHook) {
+      // 结束时调用一次，表示流式输出结束。
+      this.onDeltaHook(null);
+    }
     // make final response
     const res: LLMResponse = {
       role: LLMRole.AI,
@@ -288,11 +298,12 @@ export class LLMHelper {
       refusal: resRefusal.length === 0 ? null : resRefusal,
       tool_calls: resCalls.length === 0 ? undefined : resCalls,
     };
+    this.addMessage(res);
     return res;
   }
 
   private updateApiTools() {
-    this.apiTools = Object.values(this.toolMap).map(item => item.tool);
+    this.apiTools = Object.values(this.toolMap).map(item => item.prompt);
   }
 
   private checkMessageLimit() {

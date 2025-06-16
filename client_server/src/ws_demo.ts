@@ -1,10 +1,12 @@
 import { WebSocket, RawData, WebSocketServer } from 'ws';
+import fs from 'fs';
 import axios from 'axios';
 import FormData from 'form-data';
 
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
-import { LLMHelper, LLMProvider, LLMTool, LLMMsg } from './llm_demo';
+import { LLMRole, LLMHelper, LLMProvider, LLMTool, LLMMsg } from './llm_helper';
 import * as Api from './api_query';
+import { TTSSentence, TTSStreamVolcano } from './tts_stream_helper';
 
 const id_gen = new Snowflake(0x24);
 function generateSID(): bigint {
@@ -16,50 +18,23 @@ enum SenderType {
   User = 0x4001,
   AI = 0x4002,
   Tool = 0x4003,
-  Hidden = 0x4004,
+  System = 0x4004,
+  Hidden = 0x4020,
 };
 function llmMsgToSenderType(role: string): SenderType {
   switch (role) {
-    case 'user':
+    case LLMRole.User:
       return SenderType.User;
-    case 'assistant':
+    case LLMRole.AI:
       return SenderType.AI;
-    case 'tool':
+    case LLMRole.Tool:
       return SenderType.Tool;
+    case LLMRole.System:
+      return SenderType.System;
     default:
       console.warn(`Unknown role: ${role}, defaulting to hidden`);
       return SenderType.Hidden;
   }
-}
-
-export function wsEchoHandler(wss: WebSocketServer) {
-  wss.on('connection', (socket: WebSocket) => {
-    handleEchoConnection(socket);
-  });
-}
-
-function handleEchoConnection(socket: WebSocket) {
-  console.log('WebSocket echo connection established');
-  if (!(socket instanceof WebSocket)) {
-    console.error('Connection is not a WebSocket instance');
-    return;
-  }
-  socket.on('message', (message: RawData, isBinary: boolean) => {
-    if (isBinary) {
-      // Handle binary messages if needed
-      console.log('Received binary message:', message);
-    } else {
-      // Handle text messages
-      console.log('Received message:', message);
-      socket.send(`Echo: ${message}`);
-    }
-  });
-  socket.on('close', () => {
-    console.log('WebSocket connection closed');
-  });
-  socket.on('error', (error: Error) => {
-    console.error('WebSocket error:', error);
-  });
 }
 
 export function wsDemoHandler(wss: WebSocketServer) {
@@ -73,7 +48,7 @@ function handleDemoConnection(socket: WebSocket) {
   socket.on('message', async (message: RawData, isBinary: boolean) => {
     try {
       if (isBinary) {
-        await wsBinaryHandler(socket, Buffer.from(message as ArrayBuffer));
+        await wsBinaryHandler(socket, message as Buffer);
       } else {
         const msg = message.toLocaleString();
         wsMessageHandler(socket, msg);
@@ -397,12 +372,14 @@ type AIReply = {
 
 async function handleUserAudio(
     bo: BinaryObject, socket: WebSocket, context: DemoContext) {
+  // STT Part
   let sentence = null;
   try {
     sentence = await localSTT(bo);
   } catch (err) {
+    console.error('STT error:', err);
     sendNotification(socket, '语音识别没能成功。');
-    throw err;
+    return;
   }
   if (sentence === null) {
       sendNotification(socket, '语音识别没有给出回答。');
@@ -418,13 +395,69 @@ async function handleUserAudio(
     sendNotification(socket, '语音识别结果过长，请重新说话。');
     return;
   }
-  const chatId = context.chat?.chatId || BigInt(0);
 
+  const chatId = context.chat?.chatId || BigInt(0);
+  const sttMessageId = generateSID();
   if (sentence.length > 0) {
-    const sttMessageId = generateSID();
     // 发送语音识别的结果。
     sendSTT(socket, sentence, sttMessageId, chatId);
-    // TODO: 上传音频。
+    (async () => {
+      const res = await Api.newTextMessage({
+          messageId: sttMessageId,
+          chatId: chatId,
+          senderType: SenderType.User,
+          senderId: context.userId,
+          content: sentence});
+      if (!res.success) {
+        console.error('Failed to insert user message:', res.error);
+        return;
+      }
+      console.log('user message inserted successfully:', res);
+      sendIndexUpdate(socket, res);
+      // 上传音频。
+      // convert wav to ogg.
+      const oggBuf = await bo.toOggBuffer();
+      const resp = await Api.uploadChatAudio(sttMessageId, `${sttMessageId}.ogg`, oggBuf);
+      if (!resp.success) {
+        console.error('Failed to upload user audio:', resp.error);
+        return;
+      }
+      console.log('user audio uploaded successfully:', resp);
+    })().catch((err) => {
+      console.error('Failed to upload user message:', err);
+    });
+  }
+
+  // TTS 初始化，这里用了 TTSStreamVolcano 类。
+  // 这里用一个列表和一个函数对应初始化没有完成和完成的状态。
+  // 这样这个初始化就可以和 LLM 并行执行。
+  // TODO: TTS Stream Volcano 里面还有很多调节参数没有设置。
+  const tts = new TTSStreamVolcano();
+  const ttsWordStash: string[] = [];
+  let ttsPushDeltaImpl: ((content: string) => void) | undefined = undefined;
+  tts.beginSession().then((sessId: string) => {
+    console.log(`TTS session started with ID: ${sessId}`);
+    ttsPushDeltaImpl = tts.addText.bind(tts);
+    tts.addText(ttsWordStash.join(''));
+  }).catch((err) => {
+    console.error('TTS session start failed:', err);
+    sendNotification(socket, '语音合成初始化出错了，请稍后再试。');
+  });
+  tts.setOnDeltaHook((content: Buffer | null) => {
+    // TODO: convert Buffer to Opus Audio Frame.
+    // TODO: 响应 Client Abort Audio 的情况，中断推流，但是后台的保存还要继续。
+  });
+  tts.setOnSentenceHook((sentence: TTSSentence, begin: boolean) => {
+    clientPushSentence(socket, sentence.text, begin);
+  });
+
+
+  function ttsPushDelta(content: string) {
+    if (ttsPushDeltaImpl) {
+      ttsPushDeltaImpl(content);
+    } else {
+      ttsWordStash.push(content);
+    }
   }
 
   // LLM 通信
@@ -432,43 +465,101 @@ async function handleUserAudio(
     text: null,
     messageId: null,
   };
-  try {
-    context.llmHelper.setAddMessageHook((msg: LLMMsg) => {
-      const msgId = generateSID();
-      if (typeof msg.content === 'string' && msg.content.length > 0) {
-        aiReply.messageId = msgId;
-        // 上传用户的对话以及 AI 的回答。
-        Api.newTextMessage({
-          messageId: msgId,
-          chatId: chatId,
-          senderType: llmMsgToSenderType(msg.role),
-          senderId: context.userId,
-          content: msg.content,
-          withAudio: false,
-        }).then((res) => {
-          if (!res.success) {
-            console.error('Failed to upload AI message:', res.error);
-            return;
-          }
-          console.log('AI message uploaded successfully:', res);
-          sendIndexUpdate(socket, res);
-        });
+
+  // 这个 messageId 是巧妙地在两个回调函数之间标记同一个回复的方法。
+  // 利用了两个 Hook 函数的调用顺序。
+  let last_message_id = BigInt(0);
+  let delta_chunk_index = 0;
+  let ai_string_reply_cnt = 0;
+  context.llmHelper.setOnDeltaHook((content: string | null) => {
+    if (content !== null) {
+      // ai replies string message
+      if (last_message_id === BigInt(0)) {
+        last_message_id = generateSID();
       }
+      ++delta_chunk_index;
+      console.log(`LLM reply messageId: ${last_message_id}, `
+                  + `chunk: ${delta_chunk_index}, delta: ${content}`);
+      if (content.length > 0) {
+        ttsPushDelta(content);
+        // sendAiDelta(socket, content, chatId, last_message_id, delta_chunk_index);
+      }
+    } else {
+      console.log('LLM one message finished.');
+    }
+  });
+  context.llmHelper.setAddMessageHook((msg: LLMMsg) => {
+    if (typeof msg.content !== 'string' || msg.content.length === 0|| msg.role === LLMRole.User) {
       return true;
+    }
+    // 这是一个 move last_message_id 的操作，利用 onDeltaHook 的调用顺序在 addMessageHook 之前。
+    const msgId = last_message_id === BigInt(0) ? generateSID() : last_message_id;
+    last_message_id = BigInt(0);
+    delta_chunk_index = 0;
+    aiReply.messageId = msgId;
+    // 上传 AI 的回答。
+    (async () => {
+      // 这里的 msg.role 是 LLMRole.AI 或者 LLMRole.Tool 或者 LLMRole.System。
+      const res = await Api.newTextMessage({
+        messageId: msgId,
+        chatId: chatId,
+        senderType: llmMsgToSenderType(msg.role),
+        senderId: BigInt(1),
+        content: msg.content as string,
+      });
+      if (!res.success) {
+        console.error('Failed to upload AI message:', res.error);
+        return;
+      }
+      console.log('AI message uploaded successfully:', res);
+      sendIndexUpdate(socket, res);
+
+      // 在消息保存成功之后，再开始 TTS 结果的上传。
+      if (msg.role === LLMRole.AI) {
+        if (++ai_string_reply_cnt > 1) {
+          console.error('AI replies more than one string, this is unexpected.');
+          return;
+        }
+        await tts.endSession();
+        const audioData = await tts.waitFinish();
+        // save audio data to file.
+        const audioFilePath = `./data/tts/demo_tts_${msgId.toString()}.ogg`;
+        fs.promises.writeFile(audioFilePath, audioData).then(() => {
+          console.log(`TTS audio saved to ${audioFilePath}`);
+        }).catch((err) => {
+          console.error(`Failed to save TTS audio to ${audioFilePath}:`, err);
+        });
+        const resp = await Api.uploadChatAudio(msgId, `${msgId}.ogg`, audioData)
+        if (!resp.success) {
+          console.error('Failed to upload AI audio:', resp.error);
+          return;
+        }
+        console.log('AI audio uploaded successfully:', resp);
+      }
+    })().catch((err) => {
+      console.error('Failed to upload AI message:', err);
     });
+    return true;
+  });
+
+  try {
+    // TODO: 防止 AI 单词过多，超过 2000 个字符。
     aiReply.text = await context.llmHelper.nextTextReply(sentence);
-    context.llmHelper.setAddMessageHook(undefined);
   } catch (err) {
     sendNotification(socket, 'AI 通信没能成功。');
     throw err;
+  } finally {
+    context.llmHelper.setAddMessageHook(undefined);
+    context.llmHelper.setOnDeltaHook(undefined);
   }
+
   // 发送 LLM 的回答。
   if (aiReply.text !== null && aiReply.text.length > 0) {
     if (aiReply.messageId === null) {
       console.warn('AI reply messageId is null, generating a new one.');
       aiReply.messageId = generateSID();
     }
-    sendAIReply(socket, aiReply.text, aiReply.messageId, chatId);
+    clientPushAi(socket, aiReply.text, chatId, aiReply.messageId,);
   } else {
     sendNotification(socket, 'AI 没有给出回答。');
   }
@@ -540,16 +631,28 @@ function sendNotification(socket: WebSocket, sentence: string) {
 }
 
 
-function sendAIReply(
-    socket: WebSocket, sentence: string,
-    aiMessageId: bigint, chatId: bigint) {
-  console.log(`sendAIReply: ${sentence}`);
-  const response = {
-    type: 'tts',
-    state: 'sentence_start',
-    text: sentence,
+function sendAiDelta(
+    socket: WebSocket, delta: string,
+    chatId: bigint, aiMessageId: bigint, chunk_index: number) {
+  console.log(`sendAiDelta: ${delta}`);
+  const msg = {
+    type: 'message',
+    state: 'delta',
+    chat_id: chatId.toString(),
+    message_id: aiMessageId.toString(),
+    chunk_index,
+    role: 'ai',
+    message_type: BOType.RawText,
+    delta,
   };
-  socket.send(JSON.stringify(response));
+  console.log('Sending AI delta message:', msg);
+  socket.send(JSON.stringify(msg));
+}
+
+function clientPushAi(
+    socket: WebSocket, sentence: string,
+    chatId: bigint, aiMessageId: bigint) {
+  console.log(`clientPushAi: ${sentence}`);
   const msg = {
     type: 'message',
     state: 'new',
@@ -559,7 +662,19 @@ function sendAIReply(
     message_type: BOType.RawText,
     content: sentence,
   };
+  console.log('Sending AI message:', msg);
   socket.send(JSON.stringify(msg));
+}
+
+function clientPushSentence(
+    socket: WebSocket, sentence: string, begin: boolean) {
+  console.log(`clientPushSentence: ${sentence} ${begin ? 'start' : 'end'}`);
+  const response = {
+    type: 'tts',
+    state: begin ? 'sentence_start' : 'sentence_end',
+    text: sentence,
+  };
+  socket.send(JSON.stringify(response));
 }
 
 
@@ -583,15 +698,19 @@ function sendSTT(socket: WebSocket, sentence: string,
     message_type: BOType.RawText,
     content: sentence,
   };
+  console.log('Sending STT message:', msg);
   socket.send(JSON.stringify(msg));
 }
 
 function sendIndexUpdate(socket: WebSocket, line: Api.NewMessageResponse) {
   const msg = {
+    type: 'chat',
+    state: 'index',
     chat_id: line.chat_id.toString(),
     message_id: line.message_id.toString(),
     message_index: line.message_index,
   };
+  console.log('Sending index update:', msg);
   socket.send(JSON.stringify(msg));
 }
 
