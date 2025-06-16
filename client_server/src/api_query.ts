@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { AxiosError } from 'axios';
 import FormData from 'form-data';
+import { BOType } from './binary_packet';
 
 const API_URL = 'http://localhost:6810'; // Example API URL for creating new chat
 
@@ -68,13 +69,23 @@ export async function userOpenExChat(userId: bigint, chatId: bigint)
 
 export type BinaryObjectUploadResponse = {
   success: boolean;
+  error?: string; // Optional error message
   object_id: bigint;
 };
 export async function uploadBinaryObject(
-    objectId: bigint, fileType: number, fileSize: bigint,
+    objectId: bigint, fileType: number, saveName: string, content: Buffer) {
+  return uploadBinaryObjectImpl('object', objectId, fileType, saveName, content);
+};
+export async function uploadChatAudio(objectId: bigint, saveName: string, content: Buffer) {
+  return uploadBinaryObjectImpl('audio', objectId, BOType.AudioOpus, saveName, content);
+}
+async function uploadBinaryObjectImpl(
+    urlPart: 'object' | 'audio',
+    objectId: bigint, fileType: number,
     saveName: string, content: Buffer)
 : Promise<BinaryObjectUploadResponse> {
-  console.log(`Uploading binary object with ID ${objectId}, type ${fileType}, size ${fileSize}, name "${saveName}"`);
+  console.log(`Uploading binary object with ID ${objectId}, type ${fileType}`
+              + `, size ${content.length}, name "${saveName}"`);
   // This function should upload a BinaryObject to the server
   // For now, we return a placeholder
   // return {
@@ -84,12 +95,12 @@ export async function uploadBinaryObject(
   const form = new FormData();
   form.append('object_id', objectId.toString());
   form.append('file_type', fileType.toString());
-  form.append('file_size', fileSize.toString());
+  form.append('file_size', content.length.toString());
   form.append('content', content, {
     filename: saveName,
     contentType: 'application/octet-stream',
   });
-  return axios.post(`${API_URL}/binary/upload`, form, {
+  return axios.post(`${API_URL}/binary/${urlPart}`, form, {
       headers: {
         ...form.getHeaders(),
       },
@@ -103,13 +114,25 @@ export async function uploadBinaryObject(
   });
 }
 
+export async function downloadBinaryObject(objectId: bigint): Promise<Buffer> {
+  console.log(`Retrieving binary object with ID ${objectId}`);
+  return axios.get(`${API_URL}/binary/object`, {
+    params: {
+      object_id: objectId.toString(),
+    },
+    responseType: 'arraybuffer', // Ensure we get the binary data
+  }).then(response => Buffer.from(response.data)).catch((error: AxiosError) => {
+    console.error('Error retrieving BinaryObject:', error.message);
+    throw error;
+  });
+}
+
 export type NewTextMessageInput = {
   messageId: bigint;
   chatId: bigint;
   senderType: number;
   senderId: bigint;
   content: string;
-  withAudio: boolean;
 };
 export type NewMessageResponse = {
   success: boolean;
@@ -120,7 +143,7 @@ export type NewMessageResponse = {
 };
 export async function newTextMessage(input: NewTextMessageInput)
 : Promise<NewMessageResponse> {
-  console.log(`Creating new text message with ID ${input.messageId}, chat ID ${input.chatId}, sender type ${input.senderType}, sender ID ${input.senderId}, content "${input.content}", with audio: ${input.withAudio}`);
+  console.log(`Creating new text message with ID ${input.messageId}, chat ID ${input.chatId}, sender type ${input.senderType}, sender ID ${input.senderId}, content "${input.content}"`);
   // This function should create a new text message in the chat
   // For now, we return a placeholder
   // return {
@@ -135,7 +158,6 @@ export async function newTextMessage(input: NewTextMessageInput)
     sender_type: input.senderType,
     sender_id: input.senderId.toString(),
     content: input.content,
-    with_audio: input.withAudio,
   }).then(response => response.data).catch((error: AxiosError) => {
     console.error('Error creating new text message:', error.message);
     const data = error.response?.data as (NewMessageResponse | undefined);

@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { OpusDecoder, OpusDecoderSampleRate } from 'opus-decoder';
+import { convertWavToOpusOgg } from './media';
 
 // 定义 BOSIZE_UNKNOWN 常量，表示未知大小
 const BOSIZE_UNKNOWN = 0xFFFFFFFF;
@@ -294,7 +295,7 @@ export class BinaryObject {
   }
 
   async enableAudioConversion(sampleRate: number, channels: number) {
-    // 暂时把 AudioOpus 也加上转码。
+    // TODO: 这里目前暂时把 AudioOpus 也加上转码了，因为有些客户端的二进制代码没刷新。
     if (this.type === BOType.AudioOpusFrame
         || this.type === BOType.AudioOpus) {
       this.type = BOType.AudioWav;
@@ -408,6 +409,13 @@ export class BinaryObject {
       cursor: this.cursor,
       // data: this.getData().toString('hex') // 或者其他格式
     };
+  }
+
+  async toOggBuffer(): Promise<Buffer> {
+    if (this.type !== BOType.AudioOpus && this.type !== BOType.AudioWav) {
+      throw new Error("Cannot convert to OGG buffer for non-audio types");
+    }
+    return convertWavToOpusOgg(this.getData());
   }
 
   toBinaryPackets(maxFramePayloadSize: number): BinaryPacket[] {
