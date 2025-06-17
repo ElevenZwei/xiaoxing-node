@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { convertWavToOpusOgg } from './media';
+import { convertWavToOpusOgg } from '../media';
 
 async function main() {
   const filename = 'asr_example_zh';

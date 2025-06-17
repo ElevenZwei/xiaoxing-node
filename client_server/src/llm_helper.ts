@@ -54,16 +54,17 @@ export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
 export type OnDeltaHookFunction = (content: string | null) => void;
 
 export class LLMHelper {
-  api: OpenAI;
-  apiModelName: string;
-  apiMessages: LLMMsg[] = [];
-  apiTools: OpenAI.ChatCompletionTool[] = [];
-  toolMap: Record<string, LLMTool> = {};
-  contextMsgCnt: number;
-  systemPrompt: string | undefined;
-  addMsgHook: AddMessageHookFunction | undefined = undefined;
-  toolCallHook: ToolCallHookFunction | undefined = undefined;
-  onDeltaHook: OnDeltaHookFunction | undefined = undefined;
+  static Provider = LLMProvider;
+  private api: OpenAI;
+  private apiModelName: string;
+  private apiMessages: LLMMsg[] = [];
+  private apiTools: OpenAI.ChatCompletionTool[] = [];
+  private toolMap: Record<string, LLMTool> = {};
+  private contextMsgCnt: number;
+  private systemPrompt: string | undefined;
+  private addMsgHook: AddMessageHookFunction | undefined = undefined;
+  private toolCallHook: ToolCallHookFunction | undefined = undefined;
+  private onDeltaHook: OnDeltaHookFunction | undefined = undefined;
 
   /* 在以后功能更加多的时候分拆成 Web, Tool, History 三个类型。 */
 
@@ -146,6 +147,14 @@ export class LLMHelper {
   addTool(tool: LLMTool) {
     this.toolMap[tool.name] = tool;
     this.updateApiTools();
+  }
+
+  getApiModelName(): string {
+    return this.apiModelName;
+  }
+
+  getApi(): OpenAI {
+    return this.api;
   }
 
   /**
@@ -235,7 +244,7 @@ export class LLMHelper {
         this.systemPrompt === undefined ? [] : [
             { role: 'system', content: this.systemPrompt }
         ];
-    const nextMsg: LLMMsg[] = 
+    const nextMsg: LLMMsg[] =
         (role === undefined || content === undefined) ? [] : [
             role === LLMRole.Tool
                 ? { role, content, tool_call_id: toolCallId as string }
@@ -321,3 +330,94 @@ export class LLMHelper {
   }
 
 }
+
+
+/** ChunkCollector 用于聚合 LLM 消息。
+  * 它用于 LLM Delta 太琐碎的情况，它是一个收集工具，
+  * 提出了三种触发方式：收集到 N 个消息，收到结束符号，或者积攒的消息超过一定时间。
+  * 适合在 LLMHelper 的 OnDeltaHook 事件里面使用。
+  */
+export class ChunkCollector {
+  private messages: string[] = [];
+  private maxCount: number = 10;
+  private maxInterval: number = 1500; // 1.5 seconds
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private hook: ChunkCollector.Hook | undefined;
+
+  /** 设置最大消息数量和最大间隔时间。
+    * 在添加消息之前设置好需要的触发条件。
+    */
+  setValues(maxCount: number, maxInterval: number) {
+    this.maxCount = maxCount;
+    this.maxInterval = maxInterval;
+  }
+
+  setChunkHook(hook: ChunkCollector.Hook | undefined) {
+    this.hook = hook;
+  }
+
+  addText(msg: string | null) {
+    if (msg === null) {
+      this.trigger(ChunkCollector.Trigger.End);
+      return;
+    }
+    this.messages.push(msg);
+    if (this.hook && this.messages.length >= this.maxCount) {
+      this.trigger(ChunkCollector.Trigger.Count);
+      return;
+    }
+    if (this.timer === undefined) {
+      this.resetTimer();
+    }
+  }
+  getMessages(): string[] {
+    return this.messages.slice();
+  }
+  clearMessages() {
+    this.messages = [];
+    this.clearTimer();
+  }
+  flush() {
+    this.addText(null); // 触发结束
+  }
+
+  private resetTimer() {
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      this.trigger(ChunkCollector.Trigger.Timeout);
+    }, this.maxInterval);
+  }
+
+  private trigger(trigger: ChunkCollector.Trigger) {
+    if (this.hook) {
+      try {
+        // 如果是结束符号，即使消息是空的也要触发一次。
+        if (trigger === ChunkCollector.Trigger.End)
+          this.hook(this.messages.join(''), trigger);
+        else if (this.messages.length > 0)
+          this.hook(this.messages.join(''), trigger);
+      } catch (err) {
+        console.error(`ChunkCollector hook error: ${err}`);
+      }
+    }
+    // 清空消息的时候清除定时器，收到新的第一条消息再开始计时。
+    this.clearMessages();
+  }
+
+  private clearTimer() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+}
+
+export namespace ChunkCollector {
+  export enum Trigger {
+    Count = 'count',
+    End = 'end',
+    Timeout = 'timeout',
+  }
+  export type Hook = (messages: string, trigger: Trigger) => void;
+};
+
