@@ -2,7 +2,7 @@ import * as readline from 'readline';
 import {
   LLMHelper, LLMProvider,
   LLMTool, LLMToolPrompt, LLMToolFunction, LLMToolFunctionArgs,
-  LLMMsg } from './llm_helper';
+  LLMMsg } from '../llm_helper';
 
 const systemPrompt = 
   `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。`;

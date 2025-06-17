@@ -6,7 +6,7 @@ import util from 'util';
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
-import { parseOggPage } from './media';
+import { OggPage } from './media';
 
 const keyPath = path.resolve(__dirname, '../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');
@@ -280,19 +280,25 @@ export type TTSSentence = {
 };
 export type TTSDeltaHook = (delta: Buffer | null) => void;
 export type TTSSentenceHook = (sentence: TTSSentence, begin: boolean) => void;
+enum TTSStreamStatus {
+  Closed = 0,
+  Opening = 1,
+  Opened = 2,
+  Closing = 3,
+};
 
 /**
   * TTSStreamVolcano 类用于与火山引擎的双向 TTS 服务进行交互。
   * 它支持设置说话人、添加文本、开始和结束会话，并接收音频数据流。
   * 这个双向流式 TTS 服务允许实时发送文本并接收音频数据。
-  * 流式输入可以支持一个一个字的输入，但是合成的效果不如句子输入好。
+  * 流式输入可以支持一个一个字的输入，但是合成的效果不如一次次输入句子来得好。
   *
   * 在 'ogg_opus' 格式下，音频数据是 Opus 编码的 OGG 格式。
-  * 每一次流式输出都会得到很多个 Opus Frame，
+  * 每一次流式输出都会得到很多个 Opus Page，
   * 然后触发 onDeltaHook 回调函数。
   *
   * 火山引擎输出的 Opus Frame 在多次 addText 的文件时长编码上面有一些问题。
-  * 现在 Opus Frame 的 Granule Position 的取值不正确。
+  * 现在 Opus Page 的 Granule Position 的取值不正确。
   * 导致 ffprobe 解析时无法正确获取音频时长。
   * VLC 播放器可以正常播放，但是 Windows Media Player 无法播放。
   */
@@ -302,9 +308,11 @@ export class TTSStreamVolcano {
   private onSentenceHook?: TTSSentenceHook;
   private ws?: WebSocket;
   private sessionId?: string;
-  private sessionFinished: boolean = false;
+  private inputCache: string[] = [];
+
+  private state = TTSStreamStatus.Closed;
   private sessionFinishHook: () => void = () => {};
-  private chunks: Buffer[] = [];
+  private outputChunks: Buffer[] = [];
 
   setSpeaker(speaker: string) {
     this.speaker = speaker;
@@ -322,11 +330,15 @@ export class TTSStreamVolcano {
     * 因此每次调用 beginSession 都会创建一个新的 WebSocket 连接。
     * 每个会话用 endSession 结束之后，等待 TTS 音频数据流结束，
     * 然后调用 waitFinish 获取完整的音频数据。
+    * 下次要使用时需要重新调用 beginSession。
+    * 注意：如果在同一个 WebSocket 连接中多次调用 beginSession，会导致之前的会话被中断。
+    *
+    * TODO: 生产代码里面需要处理超时和错误情况，在 on message 里面累积的错误需要在 waitFinish 里面报告出来。
     */
   async beginSession() {
     return new Promise<string>(async (resolve, reject) => {
       this.sessionId = uuidv4().replace(/-/g, '');
-      this.sessionFinished = false;
+      this.state = TTSStreamStatus.Opening;
       this.ws = new WebSocket(url, {
         headers: {
           "X-Api-App-Key": appid,
@@ -341,15 +353,16 @@ export class TTSStreamVolcano {
       await new Promise<void>((resolve) => {
         this.ws!.on('open', () => resolve());
       });
-      await this.sendConnStart();
+      this.sendConnStart();
       let resp = await this.recvResponse();
       if (resp.opt.event !== MessageEvent.ConnectionStarted)
         throw new Error("start connection failed");
-      await this.sendSessionStart(this.sessionId!);
+      this.sendSessionStart(this.sessionId!);
       resp = await this.recvResponse();
       if (resp.opt.event !== MessageEvent.SessionStarted)
         throw new Error("start session failed");
       console.log(`WebSocket session started: ${resp.opt.sessionId}`);
+
       // set audio data handler
       this.ws.on('message', (data: WebSocket.RawData) => {
         if (!Buffer.isBuffer(data)) {
@@ -360,21 +373,29 @@ export class TTSStreamVolcano {
             || resp.opt.event === MessageEvent.TTSSentenceEnd) {
           if (resp.payloadJson != null && this.onSentenceHook) {
             const sentence: TTSSentence = JSON.parse(resp.payloadJson);
-            // TODO: add format check.
+            // TODO: add zod format check.
             this.onSentenceHook(sentence, resp.opt.event === MessageEvent.TTSSentenceStart);
           }
         } else if (resp.opt.event === MessageEvent.TTSResponse) {
           const buf = resp.payload;
-          if (buf == null) return; // no audio data
+          if (buf == null) return; // no audio data, continue
           if (this.onDeltaHook) this.onDeltaHook(buf);
-          console.log(`Received TTS audio data: ${buf.length} bytes, bytes header: ${buf.subarray(0, 4).toString()}`);
-          try {
-            const page = parseOggPage(buf);
-            console.log(`Parsed Ogg page: ${util.inspect(page, {depth: 1})}`);
-          } catch (err) {
-            console.error(`Failed to parse Ogg page: ${err}`);
+          this.outputChunks.push(buf);
+
+          // bytes header should be 'OggS'.
+          const bytesHeader = buf.subarray(0, 4).toString('ascii');
+          if (bytesHeader !== 'OggS') {
+            console.warn(`Received unexpected bytes header: ${bytesHeader}`);
+            return; // not a valid Ogg page, skip
           }
-          this.chunks.push(buf);
+          console.log(`Received TTS audio data: ${buf.length} bytes`);
+          // try {
+          //   const page = OggPage.parse(buf);
+          //   console.log(`Parsed Ogg page: ${util.inspect(page, {depth: 1})}`);
+          // } catch (err) {
+          //   console.error(`Failed to parse Ogg page: ${err}`);
+          // }
+
         } else if (resp.opt.event === MessageEvent.SessionFinished) {
           console.log(`Session finished: ${resp.opt.sessionId}`);
           this.sessionFinishedCheck();
@@ -393,12 +414,20 @@ export class TTSStreamVolcano {
           console.warn(`Received unknown event: ${resp.opt.event}`);
         }
       });
+      this.state = TTSStreamStatus.Opened;
       resolve(this.sessionId);
+      // 刷新输入缓存
+      await this.sendTaskRequest(this.sessionId, this.inputCache.join(''));
+      this.inputCache = [];
     });
   }
   async addText(word: string) {
-    if (this.sessionId == null) {
+    if (this.state === TTSStreamStatus.Closed) {
       throw new Error('WebSocket session is not started.');
+    }
+    if (this.state !== TTSStreamStatus.Opened) {
+      this.inputCache.push(word);
+      return;
     }
     // send task request
     await this.sendTaskRequest(this.sessionId!, word);
@@ -409,13 +438,16 @@ export class TTSStreamVolcano {
   }
   async waitFinish(): Promise<Buffer> {
     if (this.ws == null) return Buffer.alloc(0);
-    if (this.sessionFinished === false) {
-      await new Promise<void>(resolve => { this.sessionFinishHook = resolve; });
+    if (this.state === TTSStreamStatus.Opened) {
+      await new Promise<void>((resolve, reject) => {
+        this.setWsReject(reject);
+        this.sessionFinishHook = resolve;
+      });
       this.sessionFinishHook = () => {}; // 清除钩子，避免重复调用
     }
     await this.sendFinishConnection();
     this.closeWs();
-    return Buffer.concat(this.chunks);
+    return Buffer.concat(this.outputChunks);
   }
   close() {
     this.closeWs();
@@ -424,19 +456,22 @@ export class TTSStreamVolcano {
   // 这个函数的用意是在调用 async 的地方确保任何出错都能触发 reject，不会长期等待。
   private setWsReject(reject: (reason?: Error) => void) {
     // 对于 Error 事件，直接关闭连接。
-    this.ws!.on('error', err => {
+    this.ws!.once('error', err => {
       console.error('WebSocket error:', err);
-      reject(err);
       this.closeWs();
+      reject(err);
+    });
+    this.ws!.once('close', () => {
+      this.closeWs();
+      reject(new Error('WebSocket connection closed unexpectedly.'));
     });
   }
 
   private sessionFinishedCheck() {
-    if (this.onDeltaHook) {
+    if (this.state === TTSStreamStatus.Opened && this.onDeltaHook) {
       this.onDeltaHook(null);
-      this.onDeltaHook = undefined; // 清除钩子，避免重复调用
     }
-    this.sessionFinished = true;
+    this.state = TTSStreamStatus.Closing;
     this.sessionFinishHook();
   }
 
@@ -444,6 +479,7 @@ export class TTSStreamVolcano {
     this.ws?.close();
     this.ws = undefined;
     this.sessionId = undefined;
+    this.state = TTSStreamStatus.Closed;
   }
 
   private sendConnStart() {

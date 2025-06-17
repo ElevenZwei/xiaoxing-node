@@ -5,11 +5,12 @@
 
 import fs from 'fs';
 import path from 'path';
-import { OpusDecoder, OpusDecoderSampleRate } from 'opus-decoder';
+import { Mutex } from 'async-mutex';
+import { OpusDecoderSampleRate, OpusDecoderWebWorker } from 'opus-decoder';
 import { convertWavToOpusOgg } from './media';
 
 // 定义 BOSIZE_UNKNOWN 常量，表示未知大小
-const BOSIZE_UNKNOWN = 0xFFFFFFFF;
+export const BOSIZE_UNKNOWN = 0xFFFFFFFF;
 
 export enum BOType {
     RawText = 0x01,     // 原始文本
@@ -181,7 +182,7 @@ function isValidOpusSampleRate(rate: number): rate is OpusDecoderSampleRate {
 export class AudioDecoder {
   sampleRate: OpusDecoderSampleRate = 16000;
   channels: number = 1;
-  decoder: OpusDecoder<OpusDecoderSampleRate>;
+  decoder: OpusDecoderWebWorker<OpusDecoderSampleRate>;
   constructor(sampleRate: number, channels: number) {
     if (isValidOpusSampleRate(sampleRate)) {
       this.sampleRate = sampleRate;
@@ -189,7 +190,7 @@ export class AudioDecoder {
       console.error(`invalid sample rate ${sampleRate}, default to ${this.sampleRate}`);
     }
     this.channels = channels;
-    this.decoder = new OpusDecoder({
+    this.decoder = new OpusDecoderWebWorker({
       sampleRate: this.sampleRate,
       channels: this.channels,
     });
@@ -200,9 +201,12 @@ export class AudioDecoder {
   free(): void {
     this.decoder.free();
   }
-  decodeFrame(frame: Buffer): Buffer {
-    const {channelData, samplesDecoded, sampleRate} = this.decoder.decodeFrame(frame);
-    console.log(`opus decoder: cnt=${samplesDecoded}, rate=${sampleRate}`);
+  async decodeFrame(frame: Buffer): Promise<Buffer> {
+    if (frame == null) {
+      throw new Error("AudioDecoder: frame is null");
+    }
+    const {channelData, samplesDecoded, sampleRate} = await this.decoder.decodeFrame(frame);
+    console.log(`opus decoder: cnt=${samplesDecoded}, rate=${sampleRate}, channels=${channelData.length}`);
     return this.float32ToInt16Buffer(channelData[0]);
   }
   packWav(pcmData: Buffer): Buffer {
@@ -255,6 +259,7 @@ export class BinaryObject {
   cursor: number = 0;
   buf: Buffer = Buffer.alloc(0); // 初始为空 Buffer
   decoder: undefined | AudioDecoder = undefined;
+  private mutex: Mutex = new Mutex();
 
   fromHeader(header: BinaryPacketHeader): void {
     this.bosid = header.bosid;
@@ -296,29 +301,39 @@ export class BinaryObject {
 
   async enableAudioConversion(sampleRate: number, channels: number) {
     // TODO: 这里目前暂时把 AudioOpus 也加上转码了，因为有些客户端的二进制代码没刷新。
-    if (this.type === BOType.AudioOpusFrame
-        || this.type === BOType.AudioOpus) {
-      this.type = BOType.AudioWav;
-      this.size = BOSIZE_UNKNOWN;
-      this.decoder = new AudioDecoder(sampleRate, channels);
-      await this.decoder.ready();
-    }
-  }
-  
-  disableAudioConversion() {
-    if (this.decoder !== undefined) {
-      this.decoder.free();
-      this.decoder = undefined;
-    }
+    // 这里一定要和 decoder 共用同一个队列，保证 decoder 在使用前已经初始化完成。
+    await this.mutex.runExclusive(async () => {
+      if (this.type === BOType.AudioOpusFrame
+          || this.type === BOType.AudioOpus) {
+        this.type = BOType.AudioWav;
+        this.size = BOSIZE_UNKNOWN;
+        this.decoder = new AudioDecoder(sampleRate, channels);
+        await this.decoder.ready();
+      }
+    });
   }
 
-  appendDataWithConversion(data: Buffer): Buffer {
-    if (this.decoder !== undefined) {
-      // calling decoder to convert opus into wav.
-      data = this.decoder.decodeFrame(data);
-    }
-    this.appendDataRaw(data);
-    return data;
+  async disableAudioConversion() {
+    await this.mutex.runExclusive(() => {
+      if (this.decoder !== undefined) {
+        this.decoder.free();
+        this.decoder = undefined;
+      }
+    });
+  }
+
+  async appendDataWithConversion(data: Buffer): Promise<Buffer> {
+    // 锁要放在最外层和初始化共用一个队列，
+    // 因为 this.decoder 是异步初始化的，在初始化完成之前的读取都无效。
+    // 如果 decoder 已经存在，则调用 decoder 进行解码。
+    return await this.mutex.runExclusive(async () => {
+      if (this.decoder !== undefined) {
+          // calling decoder to convert opus into wav.
+          data = await this.decoder!.decodeFrame(data);
+      }
+      this.appendDataRaw(data);
+      return data;
+    });
   }
 
   /** 向 buffer 添加数据，自动扩容 */
@@ -347,8 +362,15 @@ export class BinaryObject {
     this.cursor += data.length;
   }
 
-  /** 最后截断 buffer，并更新 size */
-  stopAppending(): void {
+  /** 等待可能的异步操作完成后，停止追加数据 */
+  async stopAppending(): Promise<void> {
+    await this.mutex.runExclusive(() => {
+      this.stopAppendingSync();
+    });
+  }
+
+  /** 不作等待，直接截断 buffer，并更新 size */
+  stopAppendingSync(): void {
     if (this.decoder !== undefined) {
       const wav = this.decoder.packWav(this.buf.subarray(0, this.cursor));
       this.cursor = 0;
@@ -412,10 +434,13 @@ export class BinaryObject {
   }
 
   async toOggBuffer(): Promise<Buffer> {
-    if (this.type !== BOType.AudioOpus && this.type !== BOType.AudioWav) {
-      throw new Error("Cannot convert to OGG buffer for non-audio types");
+    if (this.type === BOType.AudioOpus) {
+      return this.getData(); // Opus 数据已经是 OGG 格式
     }
-    return convertWavToOpusOgg(this.getData());
+    if (this.type === BOType.AudioWav) {
+      return await convertWavToOpusOgg(this.getData());
+    }
+    throw new Error("Cannot convert to OGG buffer for non-audio types");
   }
 
   toBinaryPackets(maxFramePayloadSize: number): BinaryPacket[] {
