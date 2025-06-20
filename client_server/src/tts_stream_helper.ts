@@ -1,12 +1,11 @@
 import fs from 'fs';
 import yaml from 'yaml'
 import path from 'path'
-import util from 'util';
 
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
+import Denque from 'denque';
 import { z } from 'zod';
-import { OggPage } from './media';
 
 const keyPath = path.resolve(__dirname, '../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');
@@ -16,7 +15,8 @@ const keyVolc = keyYaml.tts.volcano;
 const appid = keyVolc.appid;
 const token = keyVolc.token;
 // const default_voice_type = 'zh_female_yuanqinvyou_moon_bigtts';
-const default_voice_type = 'zh_female_shuangkuaisisi_moon_bigtts';
+// const default_voice_type = 'zh_female_shuangkuaisisi_moon_bigtts';
+const default_voice_type = 'multi_female_gaolengyujie_moon_bigtts';
 const host = 'openspeech.bytedance.com';
 const url = `wss://${host}/api/v3/tts/bidirection`;
 
@@ -238,9 +238,15 @@ class RequestMessage {
         speaker: opts.speaker ?? '',
         audio_params: {
           format: 'ogg_opus',
-          sample_rate: 24000,
+          sample_rate: 48000,
+          bit_rate: 160000,
           enable_timestamp: true,
-        }
+        },
+        // additions: {
+        //   enable_language_detector: true,
+        //   disable_markdown_filter: true,
+        //   enable_latex_tn: true,
+        // }
       }
     };
     this.payloadJson = JSON.stringify(p);
@@ -287,6 +293,7 @@ enum TTSStreamStatus {
   Closing = 3,
 };
 
+
 /**
   * TTSStreamVolcano 类用于与火山引擎的双向 TTS 服务进行交互。
   * 它支持设置说话人、添加文本、开始和结束会话，并接收音频数据流。
@@ -302,19 +309,27 @@ enum TTSStreamStatus {
   * 导致 ffprobe 解析时无法正确获取音频时长。
   * VLC 播放器可以正常播放，但是 Windows Media Player 无法播放。
   */
-export class TTSStreamVolcano {
+export class TTSStreamVolcano implements TTSStream {
   private speaker: string = default_voice_type;
   private onDeltaHook?: TTSDeltaHook;
   private onSentenceHook?: TTSSentenceHook;
   private ws?: WebSocket;
   private sessionId?: string;
+  // inputCache 的作用是保证你在 Opening 状态下调用 addText 可以添加文本，
+  // 不必等待整个握手过程完成。
+  // 如果没能握手成功，那么在 beginSession 里面会报错，
+  // 下次 beginSession 成功之后会发送 inputCache 中的内容。
   private inputCache: string[] = [];
 
   private state = TTSStreamStatus.Closed;
-  private sessionFinishHook: () => void = () => {};
+  private sessionFinishResolvers: (() => void)[] = [];
   private outputChunks: Buffer[] = [];
 
   setSpeaker(speaker: string) {
+    if (speaker === '' || speaker === 'default') {
+      this.speaker = default_voice_type;
+      return;
+    }
     this.speaker = speaker;
   }
   setOnDeltaHook(hook: TTSDeltaHook) {
@@ -334,6 +349,7 @@ export class TTSStreamVolcano {
     * 注意：如果在同一个 WebSocket 连接中多次调用 beginSession，会导致之前的会话被中断。
     *
     * TODO: 生产代码里面需要处理超时和错误情况，在 on message 里面累积的错误需要在 waitFinish 里面报告出来。
+    * TODO: waitFinish 需要一个超时参数。
     */
   async beginSession() {
     return new Promise<string>(async (resolve, reject) => {
@@ -373,7 +389,7 @@ export class TTSStreamVolcano {
             || resp.opt.event === MessageEvent.TTSSentenceEnd) {
           if (resp.payloadJson != null && this.onSentenceHook) {
             const sentence: TTSSentence = JSON.parse(resp.payloadJson);
-            // TODO: add zod format check.
+            // TODO: add zod format check to all JSON parsing.
             this.onSentenceHook(sentence, resp.opt.event === MessageEvent.TTSSentenceStart);
           }
         } else if (resp.opt.event === MessageEvent.TTSResponse) {
@@ -389,13 +405,6 @@ export class TTSStreamVolcano {
             return; // not a valid Ogg page, skip
           }
           console.log(`Received TTS audio data: ${buf.length} bytes`);
-          // try {
-          //   const page = OggPage.parse(buf);
-          //   console.log(`Parsed Ogg page: ${util.inspect(page, {depth: 1})}`);
-          // } catch (err) {
-          //   console.error(`Failed to parse Ogg page: ${err}`);
-          // }
-
         } else if (resp.opt.event === MessageEvent.SessionFinished) {
           console.log(`Session finished: ${resp.opt.sessionId}`);
           this.sessionFinishedCheck();
@@ -441,9 +450,8 @@ export class TTSStreamVolcano {
     if (this.state === TTSStreamStatus.Opened) {
       await new Promise<void>((resolve, reject) => {
         this.setWsReject(reject);
-        this.sessionFinishHook = resolve;
+        this.sessionFinishResolvers.push(resolve);
       });
-      this.sessionFinishHook = () => {}; // 清除钩子，避免重复调用
     }
     await this.sendFinishConnection();
     this.closeWs();
@@ -472,7 +480,14 @@ export class TTSStreamVolcano {
       this.onDeltaHook(null);
     }
     this.state = TTSStreamStatus.Closing;
-    this.sessionFinishHook();
+    for (const resolver of this.sessionFinishResolvers) {
+      try {
+        resolver();
+      } catch (err) {
+        console.error('Error in session finish resolver:', err);
+      }
+    }
+    this.sessionFinishResolvers = [];
   }
 
   private closeWs() {
@@ -556,3 +571,241 @@ export class TTSStreamVolcano {
   }
 }
 
+// 现在有个需求是 AI 可能会输出很多次回复，这些不同段落的回话对应的音频需要分开生成文件。
+// 它是一段话的音频没合成完，下一段话就已经开始了。
+// 为了推送给用户，生成的音频顺序一定要保持说话的顺序。
+// 这种时候有两个方法，
+// 一个方法是多开几个 TTSStream 实例，然后实时输出的 Chunk 有一个高层次的排位顺序。
+// 另一个方法是建造一个 TTSStreamQueue 系统，一次只运行一个 TTSStream，
+// 让队列系统管理输入的文本和输出的音频数据。
+//
+// 我们这里实现一个简单的 TTSStreamQueue 系统。
+// 它有一个 (string|null)[] 类型的输入队列，
+// 遇到 null 就表示当前 TTSStream 实例的音频数据已经结束了。
+// 它会 TTSStream.waitFinish 等待音频数据结束，
+// 如果队列里面还有数据，就新建一个 TTSStream 实例继续处理下一段文本。
+// 它需要几个回调函数来处理音频数据和句子数据。
+// 它会在需要新建 TTSStream 实例的时候调用工厂回调函数 onStreamFactory，
+// 它会占用这个 TTSStream 实例的 onDeltaHook 和 onSentenceHook 回调函数，
+// 它会在每次得到一个 TTS 句子事件之后调用 this.onSentenceHook 回调函数，
+// 它会在每次得到一个 TTS 音频片段之后调用 this.onDeltaHook 回调函数。
+// 它会在每次调用完 TTSStream.waitFinish 之后对这个 TTSSteam 的整体音频数据调用 onResponseHook 回调函数，
+// 你也可以用 waitResponse 来弹出队列里最早一个 TTSStream 实例的音频数据，
+// 如果队列是空的，就会等到新的 TTSStream waitFinish 事件发生之后才返回。
+
+export interface TTSStream {
+  setOnDeltaHook(hook: TTSDeltaHook): void;
+  setOnSentenceHook(hook: TTSSentenceHook): void;
+  beginSession(): Promise<string>;
+  addText(word: string): Promise<void>;
+  endSession(): Promise<void>;
+  waitFinish(): Promise<Buffer>;
+}
+export type TTSResponseHook = (data: Buffer) => void;
+
+export class TTSStreamQueue {
+  private queue: Denque<string | null> = new Denque<string | null>();
+  private currentStream?: TTSStream;
+  // 当前 TTSStream 实例是否正在处理数据，仅当 currentStream 存在时才有意义。
+  private currentIsBusy: boolean = false;
+  private responseQueue: Denque<Buffer> = new Denque<Buffer>();
+  private onStreamFactory: () => TTSStream;
+  private onResponseHook: TTSResponseHook = (..._) => {};
+  private pendingResponseResolvers: TTSResponseHook[] = [];
+  private onSentenceHook: TTSSentenceHook = (..._) => {};
+  private onDeltaHook: TTSDeltaHook = (..._) => {};
+  private nextId: number = 0;
+
+  constructor(onStreamFactory: () => TTSStream) {
+    this.onStreamFactory = onStreamFactory;
+  }
+  setOnResponseHook(hook: TTSResponseHook | undefined) {
+    this.onResponseHook = (data: Buffer) => {
+      if (hook === undefined) return;
+      try {
+        hook(data);
+      } catch (err) {
+        console.error('TTSStreamQueue: Error in onResponseHook:', err);
+      }
+    };
+  }
+  setOnSentenceHook(hook: TTSSentenceHook | undefined) {
+    this.onSentenceHook = (sentence: TTSSentence, begin: boolean) => {
+      if (hook === undefined) return;
+      try {
+        hook(sentence, begin);
+      } catch (err) {
+        console.error('TTSStreamQueue: Error in onSentenceHook:', err);
+      }
+    }
+  }
+  setOnDeltaHook(hook: TTSDeltaHook | undefined) {
+    this.onDeltaHook = (delta: Buffer | null) => {
+      if (hook === undefined) return;
+      try {
+        hook(delta);
+      } catch (err) {
+        console.error('TTSStreamQueue: Error in onDeltaHook:', err);
+      }
+    }
+  }
+  push(text: string | null) {
+    if (text === null && this.queue.peekBack() === null) {
+      return; // 如果队列最后一个元素是 null，直接返回，不重复添加。
+    }
+    this.queue.push(text);
+    if (this.queue.length === 1) {
+      // 如果是第一个元素，启动处理过程
+      this.processNext();
+    }
+  }
+
+  waitResponse(): Promise<Buffer> {
+    return new Promise<Buffer>((resolve, reject) => {
+      if (this.responseQueue.length > 0) {
+        // 如果响应队列不为空，直接返回最早的音频数据。
+        resolve(this.responseQueue.shift()!);
+      }
+      // check input queue has null.
+      // if input queue doesn't have null, this await may block forever.
+      if (!this.queue.toArray().includes(null)) {
+        console.warn('TTSStreamQueue: No null in input queue.');
+        reject(new Error('TTSStreamQueue: No null in input queue, may block forever.'));
+      }
+      // 如果响应队列为空，等待下一个 TTSStream 实例的音频数据。
+      // 当有新的 TTSStream 实例的音频数据时，调用这个内部钩子。
+      this.pendingResponseResolvers.push((data: Buffer) => {
+        resolve(data);
+      });
+    });
+  }
+
+  private processNext() {
+    ++this.nextId;
+    // 这里统计一下调用的次数和队列长度。
+    console.log(`TTSStreamQueue: Processing next item, queue length: ${this.queue.length}, nextId: ${this.nextId}`);
+    if (this.queue.length === 0) {
+      console.log('TTSStreamQueue: No more items in queue.');
+      return; // 队列为空，什么都不做
+    }
+    // cannot be undefined, because we check queue length before this.
+    const item: string | null = this.queue.peekFront() as string | null;
+    if (item === null) {
+      this.processNull();
+    } else {
+      this.processString();
+    }
+  }
+
+  private processNull() {
+    if (this.currentStream) {
+      if (this.currentIsBusy) { return; } // 如果当前流正在处理，直接返回
+      this.currentIsBusy = true;
+      // 结束当前 TTSStream 实例的会话，并等待音频数据流结束。
+      // 如果这个出错了，直接触发空响应并清除当前流，
+      // 触发空响应是为了保证 waitResponse 不会阻塞，
+      // 同时保证 waitResponse 的顺序正确，调用一次 waitResponse 对应一段文本。
+      this.currentStream.endSession().then(() => {
+        if (this.currentStream == null) {
+          console.warn('TTSStreamQueue: Current stream is null after endSession.');
+          this.triggerResponseHook(Buffer.alloc(0)); // 触发空响应
+          this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+          return;
+        }
+        this.currentStream.waitFinish().then((data) => {
+          this.triggerResponseHook(data); // 触发响应钩子
+          this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+        }).catch((err) => {
+          console.error('TTSStreamQueue: Error waiting for current stream finish:', err);
+          this.triggerResponseHook(Buffer.alloc(0)); // 触发空响应
+          this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+        });
+      }).catch((err) => {
+        console.error('TTSStreamQueue: Error ending current stream session:', err);
+        this.triggerResponseHook(Buffer.alloc(0)); // 触发空响应
+        this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+      });
+    } else {
+      // 如果当前流是 null，说明没有正在处理的流，直接清除当前流并处理下一个元素。
+      console.warn('TTSStreamQueue: No current stream to wait for.');
+      this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+    }
+  }
+
+  private processString() {
+    if (this.currentStream) {
+      // 如果当前有 TTSStream 实例在运行，直接添加文本到它的输入缓存。
+      if (this.currentIsBusy) return;
+      const textItems = this.popAdjacentStrings();
+      if (textItems.length === 0) {
+        return; // 没有文本可添加，直接返回
+      }
+      this.currentIsBusy = true; // 标记当前流正在处理
+      this.currentStream.addText(textItems.join(''))
+        .then(() => {
+          this.clearBusyNext(); // 清除忙状态
+        }).catch((err) => {
+          console.error('TTSStreamQueue: Error adding text to current stream:', err);
+          // 触发空响应，这里不能放回数据，因为错误状态的音频不一定能放回文本数据重试。
+          this.triggerResponseHook(Buffer.alloc(0));
+          this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+        });
+      return;
+    }
+    this.currentStream = this.onStreamFactory();
+    this.currentStream.setOnDeltaHook(this.onDeltaHook.bind(this));
+    this.currentStream.setOnSentenceHook(this.onSentenceHook.bind(this));
+    this.currentIsBusy = true; // 标记当前流正在处理
+    this.currentStream.beginSession().then((sessionId) => {
+      console.log(`TTSStreamQueue: Session started with ID: ${sessionId}`);
+      this.clearBusyNext(); // 清除忙状态
+    }).catch((err) => {
+      console.error('TTSStreamQueue: Error starting session:', err);
+      // 这里不用触发空响应，因为没有消耗文本数据，下一轮可以重试。
+      this.clearCurrentStreamNext(); // 清除当前流并处理下一个元素
+    });
+  }
+
+  private popAdjacentNulls() {
+    // 从队列中移除所有相邻的 null 元素
+    while (this.queue.length > 0 && this.queue.peekFront() === null) {
+      this.queue.shift();
+    }
+  }
+
+  private popAdjacentStrings() {
+    const res: string[] = [];
+    // 从队列中移除所有相邻的字符串元素
+    while (this.queue.length > 0 && typeof this.queue.peekFront() === 'string') {
+      res.push(this.queue.shift() as string);
+    }
+    return res;
+  }
+
+  // no throw
+  private clearBusyNext() {
+    this.currentIsBusy = false;
+    setTimeout(() => {
+      this.processNext(); // 处理下一个元素
+    }, 0); // 确保在当前调用栈清空后执行，不要触发 Promise 结构的 then catch。
+  }
+
+  // no throw
+  private clearCurrentStreamNext() {
+    this.currentStream = undefined; // 清除当前流
+    this.popAdjacentNulls(); // 移除相邻的 null 元素
+    setTimeout(() => {
+      this.processNext(); // 处理下一个元素
+    }, 0); // 确保在当前调用栈清空后执行，不要触发 Promise 结构的 then catch。
+  }
+
+  private triggerResponseHook(data: Buffer) {
+    if (this.pendingResponseResolvers.length > 0) {
+      const resolver = this.pendingResponseResolvers.shift()!;
+      resolver(data);
+    } else {
+      this.responseQueue.push(data);
+    }
+    this.onResponseHook(data);
+  }
+}

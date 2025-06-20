@@ -2,10 +2,50 @@
   * media.ts
   * This file defines functions for media encoding and decoding,
   * including audio and video processing.
+  * 需要安装 ffmpeg 和 fluent-ffmpeg 库。
   */
 import ffmpeg from 'fluent-ffmpeg';
 import { PassThrough, Readable } from 'stream';
 import { once } from 'events';
+
+export type ResizeOptions = {
+  scale: number;  // 缩放比例，例如 0.5 表示缩小一半
+  method?: 'lanczos' | 'bilinear' | 'bicubic'; // 可选的缩放方法
+}
+export async function resizeJpeg(img: Buffer, opt: ResizeOptions): Promise<Buffer> {
+  return resizeJpegFFmpeg(img, opt);
+}
+export async function resizeJpegFFmpeg(img: Buffer, opt: ResizeOptions): Promise<Buffer> {
+  const { scale, method = 'lanczos' } = opt;
+  if (scale <= 0 || scale > 10) {
+    throw new Error(`Invalid scale value: ${scale}. Must be between 0 and 10.`);
+  }
+  const inputStream = new Readable();
+  inputStream.push(img);
+  inputStream.push(null);
+
+  const outputStream = new PassThrough();
+  const chunks: Buffer[] = [];
+  outputStream.on('data', (chunk) => chunks.push(chunk));
+
+  return new Promise<Buffer>(async (resolve, reject) => {
+    ffmpeg(inputStream)
+        .inputFormat('image2pipe')
+        .outputFormat('image2')
+        .videoCodec('mjpeg')
+        .outputOptions([
+          '-vf', `scale=iw*${scale}:${-1}:flags=${method}`,
+        ])
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err.message);
+          reject(err);
+        })
+        .pipe(outputStream, { end: true });
+    await once(outputStream, 'end');
+    resolve(Buffer.concat(chunks));
+  });
+}
+
 
 /**
   * 使用 ffmpeg 将 WAV Buffer 转换为 Opus 编码的 OGG Buffer
@@ -22,17 +62,20 @@ export async function convertWavToOpusOgg(wavBuffer: Buffer): Promise<Buffer> {
 
   outputStream.on('data', (chunk) => chunks.push(chunk));
 
-  ffmpeg(inputStream)
-      .inputFormat('wav')
-      .audioCodec('libopus')
-      .format('ogg')
-      .on('error', (err) => {
-        console.error('FFmpeg error:', err.message);
-      })
-      .pipe(outputStream, { end: true });
+  return new Promise<Buffer>(async (resolve, reject) => {
+    ffmpeg(inputStream)
+        .inputFormat('wav')
+        .audioCodec('libopus')
+        .format('ogg')
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err.message);
+          reject(err);
+        })
+        .pipe(outputStream, { end: true });
 
-  await once(outputStream, 'end');
-  return Buffer.concat(chunks);
+    await once(outputStream, 'end');
+    resolve(Buffer.concat(chunks));
+  });
 }
 
 export type OggPageHeader = {
@@ -237,7 +280,7 @@ export namespace OggPacket {
       return null; // Not an audio packet
     }
     const config = toc >> 3;
-    const channels = (config & 0b100) + 1; // 0: mono, 1: stereo
+    const channels = ((config >> 2) & 0b1) + 1; // 0: mono, 1: stereo
     const code = toc & 0b11;
     if (code > 3) {
       throw new OggPacketInvalidError(`Unknown Ogg audio packet code: ${code}`);

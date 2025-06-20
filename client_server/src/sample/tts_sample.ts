@@ -47,7 +47,7 @@ async function pushMergedPacketToBinaryObject(data: Buffer) {
     if (bo === null) {
       bo = new BinaryObject();
       bo.fromProps(1n, BOType.AudioOpusFrame, BOSIZE_UNKNOWN);
-      await bo.enableAudioConversion(24000, 1);
+      await bo.enableAudioConversion(48000, 1);
     }
     console.log(`Appending ${data.length} bytes to BinaryObject.`);
     await bo.appendDataWithConversion(data);
@@ -60,7 +60,7 @@ async function flushBinaryObject() {
   }
   console.log(`Flushing BinaryObject with ${bo.getData().length} bytes of data.`);
   await bo.stopAppending();
-  bo.saveToFile(path.join(__dirname, '../data/tts'), 'output', (fpath) => {
+  bo.saveToFile(path.join(__dirname, '../../data/tts'), 'output', (fpath) => {
     console.log(`BinaryObject saved to ${fpath}`);
   });
   bo = null; // Reset the BinaryObject

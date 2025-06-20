@@ -1,14 +1,19 @@
 import { WebSocket, RawData, WebSocketServer } from 'ws';
 import fs from 'fs';
+import path from 'path';
+import sanitize from 'sanitize-filename';
+import sharp from 'sharp';
 import axios from 'axios';
 import FormData from 'form-data';
-import { Mutex } from 'async-mutex';
 import Denque from 'denque';
+import { Mutex } from 'async-mutex';
 
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
-import { LLMRole, LLMHelper, LLMProvider, LLMTool, LLMMsg, ChunkCollector } from './llm_helper';
+import { LLMRole, LLMHelper, LLMProvider,  LLMMsg, ChunkCollector, } from './llm_helper';
+import { TTIToolWrapper } from './llm_tool';
+
 import * as Api from './api_query';
-import { TTSSentence, TTSStreamVolcano } from './tts_stream_helper';
+import { TTSSentence, TTSStreamVolcano, TTSStreamQueue } from './tts_stream_helper';
 import { OggPageHeader, OggStreamReader, OggPacket } from './media';
 
 const id_gen = new Snowflake(0x24);
@@ -54,7 +59,7 @@ function handleDemoConnection(socket: WebSocket) {
         wsBinaryHandler(socket, message as Buffer);
       } else {
         const msg = message.toLocaleString();
-        wsMessageHandler(socket, msg);
+        wsTextHandler(socket, msg);
       }
     } catch (error) {
       console.error('Error handling WebSocket message:', error);
@@ -63,6 +68,7 @@ function handleDemoConnection(socket: WebSocket) {
   });
   socket.on('close', () => {
     console.log('WebSocket connection closed');
+    wsContextMap.delete(socket);
   });
   socket.on('error', (error: Error) => {
     wsErrorHandler(socket, error);
@@ -90,6 +96,8 @@ class DemoContext {
   clientSampleRate: number = 16000;
   clientChannels: number = 1;
   llmHelper: LLMHelper;
+  pingTimer: NodeJS.Timeout | null = null;
+
   constructor(clientId: bigint, helper: LLMHelper) {
     this.clientId = clientId;
     this.llmHelper = helper;
@@ -97,7 +105,7 @@ class DemoContext {
 };
 const wsContextMap = new WeakMap<WebSocket, DemoContext>();
 
-function wsMessageHandler(socket: WebSocket, message: string) {
+function wsTextHandler(socket: WebSocket, message: string) {
   if (typeof message !== 'string') {
     console.error('Received non-string message:', message);
     return;
@@ -105,30 +113,34 @@ function wsMessageHandler(socket: WebSocket, message: string) {
   console.log('Received message:', message);
   const msg_json = JSON.parse(message);
   const type = msg_json.type;
-  if (type == 'hello') {
+  if (type === 'hello') {
     // client hello
     handleClientHello(socket, msg_json);
     return;
-  } else if (type == 'chat') {
+  } else if (type === 'chat') {
     handleClientChat(socket, msg_json);
-  } else if (type == 'listen') {
+  } else if (type === 'listen') {
     // client listen mode change.
     handleClientListen(socket, msg_json);
     return;
+  } else if (type === 'binary') {
+    // client wants to query binary packets
+    handleClientBinary(socket, msg_json);
   }
 }
 
 function wsBinaryHandler(socket: WebSocket, message: Buffer) {
-  console.log('Received binary message:', message);
+  // console.log('Received binary message:', message);
   // Here you can handle binary messages, e.g., audio data
   const context = wsContextMap.get(socket);
   if (!context) {
-    console.error('No context found for this socket');
+    console.error('wsBinaryHandler: No context found for this socket');
     return;
   }
   // Parse the binary message into a BinaryPacket
   const packet = BinaryPacket.fromBuffer(message);
-  console.log('Parsed BinaryPacket Header:', packet.header.toJSON());
+  // console.log('Parsed BinaryPacket Header:', packet.header.toJSON());
+  console.log('Parsed BinaryPacket type:', packet.header.type);
   // Store the packet in the context's map
   if (packet.header.bosid !== context.lastAppendBosid) {
     context.lastAppendBosid = packet.header.bosid;
@@ -163,22 +175,74 @@ function wsErrorHandler(socket: WebSocket, error: Error) {
   socket.close(1000, 'Error occurred');
 }
 
-function createNewContext(clientId: bigint): DemoContext {
+function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
   const systemPrompt = 
-    `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。`;
+    `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。重复一下，你不能使用 markdown 或者任何的非口语表达，你必须输出可以念出来的内容。`;
+  const ttiWrap = new TTIToolWrapper();
   const helper = new LLMHelper(
       LLMProvider.OpenRouter, 'openai/gpt-4o',
-      20, systemPrompt, undefined);
+      30, systemPrompt, [ ttiWrap.tool, ]);
+
   const context = new DemoContext(clientId, helper);
+  wsContextMap.set(socket, context);
+  context.pingTimer = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.ping();
+      // send json 可以刷新客户端那边的连接计时器
+      const pingMessage = JSON.stringify({ type: 'ping', client_id: context.clientId.toString() });
+      socket.send(pingMessage);
+      console.log('Sent ping message:', pingMessage);
+    } else {
+      // clear the ping timer if the socket is closed
+      console.warn('WebSocket is not open, cannot send ping');
+      clearInterval(context.pingTimer!);
+      context.pingTimer = null;
+    }
+  }, 30000); // 30 seconds ping interval
+
+  ttiWrap.setHook(async (input, output) => {
+    const bosid = generateSID();
+    const filename = bosid.toString() + '_' + sanitize(input.name || 'image') + '.jpg';
+    const data = output.image;
+    if (data == null || data.length === 0) {
+      console.error("Image empty or null");
+      output.text = '图片数据为空或无效，请重新尝试。';
+      return output;
+    }
+    try {
+      const filepath = path.join(__dirname, `../data/media/${filename}`);
+      await fs.promises.mkdir(path.dirname(filepath), { recursive: true });
+      await fs.promises.writeFile(filepath, data);
+      if (context.chat === null || context.chat.chatId === BigInt(0)) {
+        output.text = '请先打开一个聊天会话，再创建图片。';
+        return output;
+      }
+      // 上传图片到服务器，图片和这条媒体消息的 bosid 是一样的。
+      await uploadMediaMessage({
+        msgId: bosid,
+        chatId: context.chat?.chatId ?? BigInt(0),
+        mediaType: BOType.ImageJpeg,
+        mediaObjectId: bosid,
+        mediaName: filename,
+        mediaData: data, // 直接上传数据
+        socket,
+      });
+      output.text = `图片已经创建并保存，如果有工具需要引用这张图片作为输入，你可以用这个数字字符串 "${bosid.toString()}" 来引用它。`;
+      clientPushImageMessage(socket, bosid);
+    } catch (err) {
+      console.error('Failed to save image:', err);
+      output.text = '图片保存失败，请稍后再试。';
+    }
+    return output;
+  });
+
   return context;
 }
-
 
 function handleClientHello(socket: WebSocket, json: any) {
   console.log('Client says hello');
   const clientId = generateSID();
-  const context = createNewContext(clientId);
-  wsContextMap.set(socket, context);
+  const context = createNewContext(socket, clientId);
 
   const audio_params = json.audio_params;
   if (typeof audio_params === 'object') {
@@ -205,11 +269,10 @@ function handleClientHello(socket: WebSocket, json: any) {
       format: 'opus',
       // 24kHz，表示服务器传给客户端的音频数据是 24kHz 的采样率
       // 这个数字最好和客户端的 AUDIO_OUTPUT_SAMPLE_RATE 一致。
-      // 采样率是 24000Hz，单声道，帧长 60ms。
-      // 60ms 的帧长，表示每个音频包的大小是 24000 * 0.06 = 1440 字节。
+      // 实际上因为是 Opus 编码，这个数字无关紧要。
       sample_rate: 24000,
       channels: 1,
-      frame_duration: 60, // 60 ms
+      frame_duration: 60, // 60 ms，这个是说单个数据包包含的音频时长上限。
     },
   }
   // log
@@ -260,6 +323,7 @@ async function handleClientChat(socket: WebSocket, json: any) {
         lastMessageIndex: 0, // 初始化消息索引
       };
       sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
+      // clientImageTest(socket);
       return;
     }
 
@@ -285,6 +349,59 @@ async function handleClientChat(socket: WebSocket, json: any) {
   }
 }
 
+async function handleClientBinary(socket: WebSocket, json: any) {
+  console.log('Client binary request:', json);
+  const context = wsContextMap.get(socket);
+  if (!context) {
+    console.error('No context found for this socket');
+    return;
+  }
+  try {
+    const state = json.state;
+    if (state === 'query') {
+      const bosid = BigInt(json.bosid);
+      if (bosid === BigInt(0)) {
+        console.error('Invalid bosid:', bosid);
+        socket.send(JSON.stringify({
+          type: 'binary',
+          state: 'error',
+          message: '无效的 bosid，请检查请求格式。',
+        }));
+        return;
+      }
+      const info: Api.BinaryObjectInfoResponse = await Api.fetchBinaryObjectInfo(bosid);
+      if (!info.success) {
+        console.error('Failed to fetch BinaryObject info:', info);
+        socket.send(JSON.stringify({
+          type: 'binary',
+          state: 'error',
+          message: `无法获取 BinaryObject 信息，bosid: ${bosid.toString()}`,
+        }));
+        return;
+      }
+      const data = await Api.downloadBinaryObject(bosid);
+      if (!data.success) {
+        console.error('Failed to download BinaryObject:', data);
+        socket.send(JSON.stringify({
+          type: 'binary',
+          state: 'error',
+          message: `无法下载 BinaryObject 数据，bosid: ${bosid.toString()}`,
+        }));
+        return;
+      }
+      if (info.file_type === BOType.ImageJpeg) {
+        // 发送图片数据
+        clientPushImage(socket, bosid, data.data);
+      } else {
+        console.warn('Unsupported BinaryObject type:', info.file_type);
+      }
+    }
+  } catch (err: any) {
+    console.error('Error handling client binary request:', err?.message || err);
+    return;
+  }
+}
+
 /**
  * 
  * @param socket WebSocket
@@ -305,42 +422,47 @@ async function handleClientListen(socket: WebSocket, json: any) {
     console.error('No context found for this socket');
     return;
   }
-  const state = json.state;
-  if (state == 'start') {
-    const mode = json.mode;
-    if (mode == 'manual') {
-      console.log('Client is in manual listen mode');
-      if (context.chat === null || context.chat.chatId === BigInt(0)) {
-        const chatId = generateSID();
-        try {
-          const chatInfo = await Api.userNewChat(context.userId, chatId, 'New Chat');
-          if (!chatInfo.success) {
-            throw new Error(`Failed to create new chat session, chatId: ${chatId}`);
+  try {
+    const state = json.state;
+    if (state == 'start') {
+      const mode = json.mode;
+      if (mode == 'manual') {
+        console.log('Client is in manual listen mode');
+        if (context.chat === null || context.chat.chatId === BigInt(0)) {
+          const chatId = generateSID();
+          try {
+            const chatInfo = await Api.userNewChat(context.userId, chatId, 'New Chat');
+            if (!chatInfo.success) {
+              throw new Error(`Failed to create new chat session, chatId: ${chatId}`);
+            }
+            console.log('Created new chat session:', chatInfo);
+            context.chat = {
+              chatId: chatInfo.chat_id,
+              chatName: chatInfo.chat_name,
+              lastMessageIndex: chatInfo.last_message_index,
+            };
+            sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
+          } catch (err) {
+            console.error('Failed to create new chat:', err);
+            sendChatOpenFailed(socket, chatId, '无法创建新的聊天会话，请稍后再试。');
           }
-          console.log('Created new chat session:', chatInfo);
-          context.chat = {
-            chatId: chatInfo.chat_id,
-            chatName: chatInfo.chat_name,
-            lastMessageIndex: chatInfo.last_message_index,
-          };
-          sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
-        } catch (err) {
-          console.error('Failed to create new chat:', err);
-          sendChatOpenFailed(socket, chatId, '无法创建新的聊天会话，请稍后再试。');
         }
+      } else {
+        console.error('Unsupported listen mode:', mode);
       }
-    } else {
-      console.error('Unsupported listen mode:', mode);
-    }
-    return;
-  }
-  if (state == 'stop') {
-    console.log('Client stopped listening');
-    const last_obj = await finishLastBinaryObject(context);
-    if (last_obj === undefined) {
       return;
+    } else if (state == 'stop') {
+      console.log('Client stopped listening');
+      const last_obj = await finishLastBinaryObject(context);
+      if (last_obj === undefined) {
+        return;
+      }
+      await handleUserAudio(last_obj, socket, context)
     }
-    await handleUserAudio(last_obj, socket, context)
+  } catch (err) {
+    console.error('Error handling client listen request:', err);
+    // clientPushNotify(socket, '处理监听请求时发生错误，请稍后再试。');
+    return;
   }
 }
 
@@ -402,12 +524,12 @@ async function handleUserAudio(
     sentence = await localSTT(bo);
   } catch (err) {
     console.error('STT error:', err);
-    clientPushNotify(socket, '语音识别没能成功。');
+    clientPushNotify(socket, '语音识别开小差了。');
     return;
   }
   if (sentence === null) {
-      clientPushNotify(socket, '语音识别没有给出回答。');
-      return;
+    clientPushNotify(socket, '语音识别不能理解你说的话。');
+    return;
   }
   // if (sentence.length === 0) {
   //   // demo sentence
@@ -416,7 +538,7 @@ async function handleUserAudio(
   // }
   if (sentence.length > 2000) {
     // 如果识别的句子太长，可能是噪音或者错误的识别结果。
-    clientPushNotify(socket, '语音识别结果过长，请重新说话。');
+    clientPushNotify(socket, '机器人没听懂你叨叨，请重新说话。');
     return;
   }
 
@@ -445,19 +567,14 @@ async function handleUserAudio(
 
   // 这个 messageId 是巧妙地在两个回调函数之间标记同一个回复的方法。
   // 利用了两个 Hook 函数的调用顺序。
-  let last_message_id = BigInt(0);
-  let delta_chunk_index = 0;
-  let ai_string_reply_cnt = 0;
+  // 工具调用的申请也会有文本回复
   context.llmHelper.setOnDeltaHook((content: string | null) => {
     if (content !== null) {
       // ai replies string message
-      if (last_message_id === BigInt(0)) {
-        last_message_id = generateSID();
-        tts.setMessageId(last_message_id, chatId);
+      if (aiReply.messageId === null) {
+        aiReply.messageId = generateSID();
+        tts.setMessageId(aiReply.messageId, chatId);
       }
-      ++delta_chunk_index;
-      console.log(`LLM reply messageId: ${last_message_id}, `
-                  + `chunk: ${delta_chunk_index}, delta: ${content}`);
       if (content.length > 0) {
         tts.addText(content);
       }
@@ -467,79 +584,74 @@ async function handleUserAudio(
     }
   });
   context.llmHelper.setAddMessageHook((msg: LLMMsg) => {
-    if (typeof msg.content !== 'string' || msg.content.length === 0|| msg.role === LLMRole.User) {
+    if (msg.role === LLMRole.User) {
       return true;
     }
-    // 这是一个 move last_message_id 的操作，利用 onDeltaHook 的调用顺序在 addMessageHook 之前。
-    const msgId = last_message_id === BigInt(0) ? generateSID() : last_message_id;
-    last_message_id = BigInt(0);
-    delta_chunk_index = 0;
-    aiReply.messageId = msgId;
-    // 上传 AI 的回答。
-    (async () => {
-      // 这里的 msg.role 是 LLMRole.AI 或者 LLMRole.Tool 或者 LLMRole.System。
-      const res = await Api.newTextMessage({
-        messageId: msgId,
-        chatId: chatId,
-        senderType: llmMsgToSenderType(msg.role),
-        senderId: BigInt(1),
-        content: msg.content as string,
-      });
-      if (!res.success) {
-        console.error('Failed to upload AI message:', res.error);
-        await tts.waitFinish(); // 等待 TTS 结束
-        return;
-      }
-      console.log('AI message uploaded successfully:', res);
-      clientPushMessageIndex(socket, res);
+    if ('tool_calls' in msg && msg.tool_calls != null && msg.tool_calls.length > 0) {
+      // 这时候 msg 的内容是工具调用的申请。
+      const msgId = generateSID();
+      uploadToolMessage({ msgId, chatId, msg, socket, });
+      // 调用申请可能会附带一些文本内容，这里不能返回。
+    }
+    if (msg.role === LLMRole.Tool) {
+      // 这个时候 msg 是工具调用的结果。
+      const msgId = generateSID();
+      uploadToolMessage({ msgId, chatId, msg, socket, });
+      return true;
+    }
 
-      // 在消息保存成功之后，再开始 TTS 结果的上传。
-      if (msg.role === LLMRole.AI) {
-        const audioData = await tts.waitFinish();
-        if (++ai_string_reply_cnt > 1) {
-          console.error('AI replies more than one string, this is unexpected.');
-          return;
-        }
-        // save audio data to file.
-        const audioFilePath = `./data/tts/demo_tts_${msgId.toString()}.ogg`;
-        fs.promises.writeFile(audioFilePath, audioData).then(() => {
-          console.log(`TTS audio saved to ${audioFilePath}`);
-        }).catch((err) => {
-          console.error(`Failed to save TTS audio to ${audioFilePath}:`, err);
-        });
-        const resp = await Api.uploadChatAudio(msgId, `${msgId}.ogg`, audioData)
-        if (!resp.success) {
-          console.error('Failed to upload AI audio:', resp.error);
-          return;
-        }
-        console.log('AI audio uploaded successfully:', resp);
+    // 之后应该只有 AI 的文字回复了。
+    if (msg.role !== LLMRole.AI) {
+      console.warn(`Unexpected LLM message role: ${msg.role}`);
+      return true;
+    }
+    if (msg.content == null) {
+      return true; // 没有内容的 AI 回复，直接忽略。
+    }
+    if (typeof msg.content !== 'string') {
+      console.warn(`AI reply content is not a string: ${typeof msg.content}`);
+      return true; // 不是字符串的 AI 回复，直接忽略。
+    }
+    if (msg.content.length === 0) {
+      console.warn('AI reply content is empty, ignoring.');
+      return true; // 空内容的 AI 回复，直接忽略。
+    }
+
+    if (aiReply.messageId === null) {
+      // 如果有文字内容，这个时候 aiReply.messageId 还是 null，
+      // 表示还没有开始 TTS 会话，通常是哪里出错了
+      console.warn('AI reply message id is null, should not happen.');
+      return true;
+    }
+    const msgId = aiReply.messageId === null ? generateSID() : aiReply.messageId;
+    aiReply.messageId = null; // 清空 messageId，防止 setOnDeltaHook 重复使用。
+
+    clientPushAI(socket, msg.content, chatId, msgId);
+    // 上传 AI 的文本回答。
+    tts.waitResponse().then((audio: Buffer) => {
+      if (audio.length === 0) {
+        throw new Error('TTS audio is empty');
       }
-    })().catch((err) => {
-      console.error('Failed to upload AI message:', err);
+      uploadAIMessage({ msgId, chatId, msg, audio, socket });
+    }).catch((err) => {
+      console.error('TTS error:', err);
+      clientPushNotify(socket, '语音合成没能成功。');
+      uploadAIMessage({ msgId, chatId, msg, audio: null, socket, });
     });
     return true;
   });
 
   try {
     // TODO: 防止 AI 单词过多，超过 2000 个字符。
-    aiReply.text = await context.llmHelper.nextTextReply(sentence);
-  } catch (err) {
-    clientPushNotify(socket, 'AI 通信没能成功。');
-    throw err;
-  } finally {
-    context.llmHelper.setAddMessageHook(undefined);
-    context.llmHelper.setOnDeltaHook(undefined);
-  }
-
-  // 发送 LLM 的回答。
-  if (aiReply.text !== null && aiReply.text.length > 0) {
-    if (aiReply.messageId === null) {
-      console.warn('AI reply messageId is null, generating a new one.');
-      aiReply.messageId = generateSID();
+    const lastText = await context.llmHelper.nextTextReply(sentence);
+    if (lastText == null || lastText.length === 0) {
+      // AI 没有给出回答。
+      clientPushNotify(socket, 'AI 没有给出回答。');
+      return;
     }
-    clientPushAi(socket, aiReply.text, chatId, aiReply.messageId,);
-  } else {
-    clientPushNotify(socket, 'AI 没有给出回答。');
+  } catch (err) {
+    clientPushNotify(socket, 'AI 不愿意回答你的想法。');
+    throw err;
   }
 }
 
@@ -608,10 +720,10 @@ function clientPushNotify(socket: WebSocket, sentence: string) {
   socket.send(JSON.stringify(response));
 }
 
-function clientPushAiDelta(
+function clientPushAIDelta(
     socket: WebSocket, delta: string,
     chatId: bigint, aiMessageId: bigint, chunkIndex: number) {
-  console.log(`clientPushAiDelta: ${delta}`);
+  console.log(`clientPushAIDelta: ${delta}`);
   const msg = {
     type: 'message',
     state: 'delta',
@@ -626,10 +738,10 @@ function clientPushAiDelta(
   socket.send(JSON.stringify(msg));
 }
 
-function clientPushAi(
+function clientPushAI(
     socket: WebSocket, sentence: string,
     chatId: bigint, aiMessageId: bigint) {
-  console.log(`clientPushAi: ${sentence}`);
+  console.log(`clientPushAI: ${sentence}`);
   const msg = {
     type: 'message',
     state: 'new',
@@ -707,51 +819,67 @@ function clientPushAudio(socket: WebSocket, oggPacket: OggPacket) {
   obj.fromProps(bosid, BOType.AudioOpusFrame, oggPacket.length);
   obj.appendDataRaw(oggPacket);
   obj.stopAppendingSync(); // Mark the object as complete
-  console.log('Sending audio with bosid:', bosid.toString(), ", size:", obj.size);
-  const packetSize = 1800; // Example packet size
+  // console.log('Sending audio with bosid:', bosid.toString(), ", size:", obj.size);
+  const packetSize = 1800;
   obj.toBinaryPackets(packetSize).forEach(packet => {
     const buffer = packet.toBuffer();
-    console.log(
-      "Sending BinaryPacket with bosid:", packet.header.bosid.toString(),
-      ", offset:", packet.header.offset,
-      ", frame_size:", packet.header.frameSize);
     socket.send(buffer);
   });
+}
+
+function clientPushImageMessage(socket: WebSocket, bosid: bigint) {
+    const info = { type: 'image', bosid: bosid.toString() };
+    // Send the image info to the client
+    socket.send(JSON.stringify(info));
 }
 
 /**
  * 发送图片给客户端
  * @param socket WebSocket
+ * @param bosid bigint
  * @param imageData Buffer
- * 发送给客户端图片的 JSON 格式如下
- * { "type": "image", "bosid": <bigint> }
- * 其中 bosid 是一个唯一的 ID，用于标识这张图片。
- * 然后是许多个 BinaryPacket 数据包。
+ * 给客户端发送多个 BinaryPacket 数据包。
  * 数据包是 BinaryObject buffer 载入图片数据之后，切分出来的。
  */
-function clientPushImage(socket: WebSocket, imageData: Buffer) {
-  const bosid = generateSID();
-  const response = {
-    type: 'image',
-    bosid: bosid.toString(),
-  };
-  socket.send(JSON.stringify(response));
-
-  // Create a BinaryObject and append the image data
-  const obj = new BinaryObject();
-  obj.fromProps(bosid, BOType.ImageJpeg, imageData.length);
-  obj.appendDataRaw(imageData);
-  obj.stopAppendingSync(); // Mark the object as complete
-  console.log('Sending image with bosid:', bosid.toString(), ", size:", obj.size);
-  // Send the BinaryObject as multiple BinaryPackets
-  const packetSize = 1800; // Example packet size
-  obj.toBinaryPackets(packetSize).forEach(packet => {
-    const buffer = packet.toBuffer();
-    console.log('Sending BinaryPacket with bosid:', packet.header.bosid.toString(), 
-        ", offset:", packet.header.offset,
-        ", frame_size:", packet.header.frameSize);
-    socket.send(buffer);
+function clientPushImage(socket: WebSocket, bosid: bigint, imageData: Buffer) {
+  (async () => {
+    // resize image to fit screen.
+    imageData = await resizeImageFit(imageData);
+    // Create a BinaryObject and append the image data
+    const obj = new BinaryObject();
+    obj.fromProps(bosid, BOType.ImageJpeg, imageData.length);
+    obj.appendDataRaw(imageData);
+    obj.stopAppendingSync(); // Mark the object as complete
+    console.log('Sending image with bosid:', bosid.toString(), ", size:", obj.size);
+    // Send the BinaryObject as multiple BinaryPackets
+    const packetSize = 1800; // Example packet size
+    obj.toBinaryPackets(packetSize).forEach(packet => {
+      const buffer = packet.toBuffer();
+      console.log('Sending BinaryPacket with bosid:', packet.header.bosid.toString(), 
+          ", offset:", packet.header.offset,
+          ", frame_size:", packet.header.frameSize);
+      socket.send(buffer);
+    });
+  })().catch((err) => {
+    console.error('Error sending image:', err);
   });
+}
+
+async function clientImageTest(socket: WebSocket) {
+  // read an image file and send it to the client
+  // Path to your test image
+  const imagePath = path.join(__dirname, '../data/media/sample.jpg');
+  try {
+    const imageData = await fs.promises.readFile(imagePath);
+    console.log('Read image data from file:', imagePath);
+    const bosid = generateSID();
+    console.log('Generated bosid for image:', bosid.toString());
+    clientPushImageMessage(socket, bosid);
+    clientPushImage(socket, bosid, imageData);
+  } catch (err) {
+    console.error('Failed to read image file:', err);
+    clientPushNotify(socket, '无法读取测试图片，请检查文件路径。');
+  }
 }
 
 
@@ -813,9 +941,153 @@ function uploadUserMessage(input: UploadUserMessageInput) {
   });
 }
 
+type UploadAIMessageInput = {
+  msgId: bigint;
+  chatId: bigint;
+  msg: LLMMsg;
+  audio: Buffer | null; // AI 的音频数据
+  socket: WebSocket;
+};
+function uploadAIMessage(input: UploadAIMessageInput) {
+  (async () => {
+    // 这里的 msg.role 是 LLMRole.AI 或者 LLMRole.Tool 或者 LLMRole.System。
+    const role = input.msg.role;
+    const res = await Api.newTextMessage({
+      messageId: input.msgId,
+      chatId: input.chatId,
+      senderType: llmMsgToSenderType(role),
+      senderId: BigInt(1),  // TODO: 这里替换成 AI Avatar 的 ID。
+      content: input.msg.content as string,
+    });
+    if (!res.success) {
+      console.error('Failed to upload AI message:', res.error);
+      return;
+    }
+    console.log('AI message uploaded successfully:', res);
+    clientPushMessageIndex(input.socket, res);
+
+    // 在消息保存成功之后，再开始 TTS 结果的上传。
+    if (role === LLMRole.AI) {
+      if (input.audio === null) {
+        console.warn('AI audio data is null, skipping upload.');
+        return;
+      }
+      const resp = await Api.uploadChatAudio(input.msgId, `${input.msgId}.ogg`, input.audio)
+      if (!resp.success) {
+        console.error('Failed to upload AI audio:', resp.error);
+        return;
+      }
+      console.log('AI audio uploaded successfully:', resp);
+    }
+  })().catch((err) => {
+    console.error('Failed to upload AI message:', err);
+  });
+}
+
+type UploadToolMessageInput = {
+  msgId: bigint;
+  chatId: bigint;
+  msg: LLMMsg;
+  socket: WebSocket;
+}
+function uploadToolMessage(input: UploadToolMessageInput) {
+  (async () => {
+    const msg = input.msg;
+    let senderType: SenderType;
+    let content: string;
+    if (msg.role === LLMRole.AI
+      && 'tool_calls' in msg && msg.tool_calls != null
+      && msg.tool_calls.length > 0) {
+      // tool request
+      senderType = SenderType.AI;
+      content = JSON.stringify(msg.tool_calls);
+    } else if (msg.role === LLMRole.Tool) {
+      senderType = SenderType.Tool;
+      content = msg.content;
+    } else {
+      throw new Error(`Unexpected LLM message role: ${msg.role}`);
+    }
+    const res = await Api.newToolMessage({
+      messageId: input.msgId,
+      chatId: input.chatId,
+      senderType,
+      senderId: BigInt(1), // TODO: 这里替换成 Tool Avatar 的 ID。
+      content,
+    });
+    if (!res.success) {
+      console.error('Failed to upload tool message:', res.error);
+      return;
+    }
+    console.log('Tool message uploaded successfully:', res);
+    clientPushMessageIndex(input.socket, res);
+  })().catch((err) => {
+    console.error('Failed to upload tool message:', err);
+  });
+}
+
+type UploadMediaMessageInput = {
+  msgId: bigint;
+  chatId: bigint;
+  mediaType: BOType;
+  mediaObjectId: bigint;
+  mediaName: string;
+  mediaData?: Buffer; // 可选的媒体数据，如果有的话直接上传，空的话表示引用现有的 media 对象。
+  socket: WebSocket;
+}
+function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
+  return (async () => {
+    // 如果有媒体数据，直接上传
+    if (input.mediaData) {
+      const res = await Api.uploadBinaryObject(
+        input.mediaObjectId, input.mediaType,
+        input.mediaName, input.mediaData);
+      if (!res.success) {
+        console.error('Failed to upload media object:', res.error);
+        throw new Error(`Failed to upload media object: ${res.error}`);
+      }
+      console.log('Media object uploaded successfully:', res);
+    }
+
+    // 上传媒体消息
+    const res = await Api.newMediaMessage({
+      messageId: input.msgId,
+      chatId: input.chatId,
+      senderType: SenderType.AI,
+      senderId: BigInt(1), // TODO: 这里替换成 AI Avatar 的 ID。
+      mediaType: input.mediaType,
+      mediaObjectId: input.mediaObjectId,
+      mediaName: input.mediaName,
+    });
+    if (!res.success) {
+      console.error('Failed to upload media message:', res.error);
+      throw new Error(`Failed to upload media message: ${res.error}`);
+    }
+    console.log('Media message uploaded successfully:', res);
+    clientPushMessageIndex(input.socket, res);
+  })();
+}
+
+async function resizeImageFit(imageBuffer: Buffer): Promise<Buffer> {
+  const meta = await sharp(imageBuffer).metadata();
+  const { width, height } = meta;
+  const maxWidth = 280; // 最大宽度
+  const maxHeight = 340; // 最大高度
+  const resizeRatio = Math.min(maxWidth / width, maxHeight / height, 1);
+  console.log(`Resizing image from ${width}x${height} to fit within ${maxWidth}x${maxHeight}`);
+  return sharp(imageBuffer)
+    .resize(Math.round(width * resizeRatio), Math.round(height * resizeRatio),
+          { fit: 'inside', withoutEnlargement: true })
+    .toBuffer();
+}
+
 class LLMTTS {
   private collector = new ChunkCollector();
-  private tts = new TTSStreamVolcano();
+  private ttsSpeaker: string = 'default';
+  private tts = new TTSStreamQueue(() => {
+    const vol = new TTSStreamVolcano();
+    vol.setSpeaker(this.ttsSpeaker);
+    return vol;
+  });
   private reader = new OggStreamReader();
   private packetCache: OggPacket[] = [];
   private socket: WebSocket;
@@ -840,33 +1112,30 @@ class LLMTTS {
     this.tts.setOnSentenceHook((sentence: TTSSentence, begin: boolean) => {
       clientPushSentence(socket, sentence.text, begin);
     });
-    this.tts.beginSession().then((sessId: string) => {
-      console.log(`TTS session started with ID: ${sessId}`);
-    }).catch((err) => {
-      console.error('Failed to start TTS session:', err);
-      clientPushNotify(socket, '语音合成初始化出错了，请稍后再试。');
-    });
   }
   setMessageId(msgId: bigint, chatId: bigint) {
     this.messageId = msgId;
     this.chatId = chatId;
     this.chunkIndex = 0;
   }
-  setSpeaker(speaker: string) { this.tts.setSpeaker(speaker); }
+  setSpeaker(speaker: string) { this.ttsSpeaker = speaker; }
   addText(text: string | null) {
     this.collector.addText(text);
   }
-  async waitFinish(): Promise<Buffer> {
-    await this.tts.endSession();
-    return await this.tts.waitFinish();
+  async waitResponse(): Promise<Buffer> {
+    return await this.tts.waitResponse();
   }
 
-  private onChunk(chunk: string, _trigger: ChunkCollector.Trigger) {
-    console.log(`Received collected chunk: ${chunk}`);
+  private onChunk(chunk: string, trigger: ChunkCollector.Trigger) {
+    console.log(`Received collected chunk: ${chunk}, length: ${chunk.length}`);
     if (chunk.length > 0) {
-      this.tts.addText(chunk);
-      clientPushAiDelta(this.socket, chunk,
+      this.tts.push(chunk);
+      clientPushAIDelta(this.socket, chunk,
           this.chatId, this.messageId, this.chunkIndex++);
+    }
+    if (trigger === ChunkCollector.Trigger.End) {
+      console.log('TTS chunk collection ended, flushing remaining packets.');
+      this.tts.push(null); // 结束 TTS 流
     }
   }
   private onTTSDelta(data: Buffer | null) {
@@ -905,7 +1174,7 @@ class LLMTTS {
   }
 
   // 函数的规则是如果队列有成员，那么推送一个包裹并且设置一个定时器，
-  // 经过 96% 的播放时间之后再次触发这个函数。
+  // 经过 98% 的播放时间之后再次触发这个函数。
   private triggerSendAudio() {
     if (this.audioQueue.length === 0) {
       console.log('Audio queue is empty, stopping timer.');
@@ -916,7 +1185,7 @@ class LLMTTS {
     // cannot be undefined, because we check length above.
     const packet: OggPacket = this.audioQueue.shift() as OggPacket;
     const audioTime = 60; // TODO: 计算音频包的播放时间
-    this.resetTimer(audioTime * 0.96);
+    this.resetTimer(audioTime * 0.98);
     clientPushAudio(this.socket, packet);
   }
 

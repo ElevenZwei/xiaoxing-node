@@ -49,7 +49,9 @@ export type LLMMsg =
   | { role: 'tool', content: string, tool_call_id: string, };
 export type LLMRequest = OpenAI.Chat.ChatCompletionMessageParam;
 export type LLMResponse = OpenAI.Chat.ChatCompletionMessage;
-export type ToolCallHookFunction = (call: OpenAI.Chat.ChatCompletionMessageToolCall) => boolean;
+export type LLMToolCall = OpenAI.Chat.ChatCompletionMessageToolCall;
+export type ToolCallHookFunction = (call: LLMToolCall) => boolean;
+export type ToolCallFinishHookFunction = (call: LLMToolCall, resp: string) => void;
 export type AddMessageHookFunction = (msg: LLMMsg) => boolean;
 export type OnDeltaHookFunction = (content: string | null) => void;
 
@@ -62,9 +64,10 @@ export class LLMHelper {
   private toolMap: Record<string, LLMTool> = {};
   private contextMsgCnt: number;
   private systemPrompt: string | undefined;
-  private addMsgHook: AddMessageHookFunction | undefined = undefined;
-  private toolCallHook: ToolCallHookFunction | undefined = undefined;
-  private onDeltaHook: OnDeltaHookFunction | undefined = undefined;
+  private addMsgHook: AddMessageHookFunction = (..._) => true;  // 默认允许添加所有消息
+  private toolCallHook: ToolCallHookFunction = (..._) => true;  // 默认允许所有工具调用
+  private toolCallFinishHook: ToolCallFinishHookFunction = (..._) => {};
+  private onDeltaHook: OnDeltaHookFunction = (..._) => {};
 
   /* 在以后功能更加多的时候分拆成 Web, Tool, History 三个类型。 */
 
@@ -102,12 +105,39 @@ export class LLMHelper {
 
   // 可以用这个函数用来持久化保存聊天记录，也可以阻止某句话放进上下文。
   setAddMessageHook(hook: AddMessageHookFunction | undefined) {
-    this.addMsgHook = hook;
+    this.addMsgHook = (msg: LLMMsg) => {
+      try {
+        if (hook === undefined) return true;
+        return hook(msg);
+      } catch (err) {
+        console.error(`Add message hook error: ${err}`);
+        return false; // 中止添加消息
+      }
+    }
   }
 
   // 可以用这个函数记录 Tool Call 的情况，也可以中止某个工具的过量使用。
   setToolCallHook(hook: ToolCallHookFunction | undefined) {
-    this.toolCallHook = hook;
+    this.toolCallHook = (call: LLMToolCall) => {
+      try {
+        if (hook === undefined) return true;
+        return hook(call);
+      } catch (err) {
+        console.error(`Tool call hook error: ${err}`);
+        return false; // 中止工具调用
+      }
+    };
+  }
+
+  setToolCallFinishHook(hook: ToolCallFinishHookFunction | undefined) {
+    this.toolCallFinishHook = (call: LLMToolCall, resp: string) => {
+      try {
+        if (hook === undefined) return;
+        hook(call, resp);
+      } catch (err) {
+        console.error(`Tool call finish hook error: ${err}`);
+      }
+    };
   }
 
   // 可以用这个函数获取流式文本内容的输出。
@@ -118,7 +148,14 @@ export class LLMHelper {
   // 但不是每个 addMessageHook 事件之前都有 onDeltaHook 事件。
   // 例如用户的输入或者工具的输出不会触发 onDeltaHook。
   setOnDeltaHook(hook: OnDeltaHookFunction | undefined) {
-    this.onDeltaHook = hook;
+    this.onDeltaHook = (content: string | null) => {
+      try {
+        if (hook === undefined) return;
+        hook(content);
+      } catch (err) {
+        console.error(`OnDeltaHook error: ${err}`);
+      }
+    };
   }
 
   // 恢复历史聊天记录。
@@ -191,15 +228,15 @@ export class LLMHelper {
       // check depth.
       ++counter;
       const toolCallStr = JSON.stringify(message.tool_calls);
-      console.log(`handlePotentialToolCall: tool calls found, cnt=${toolCalls.length}`
-          + `, call=${toolCallStr}, depth=${counter}`);
+      // console.log(`handlePotentialToolCall: tool calls found, cnt=${toolCalls.length}`
+      //     + `, call=${toolCallStr}, depth=${counter}`);
       if (counter > 10) {
         throw new Error(`too many tool calls, cnt=${counter}, last_call=${toolCallStr}`);
       }
       const toolMsgs: LLMMsg[] = [];
       const jobs = toolCalls.map(async (tc: OpenAI.Chat.ChatCompletionMessageToolCall) => {
         const toolName = tc.function.name;
-        if (this.toolCallHook !== undefined && this.toolCallHook(tc) === false) {
+        if (this.toolCallHook(tc) === false) {
           throw new Error(`tool call interrupted by hook: name=${toolName}`);
         }
         const toolFunc = this.toolMap[toolName]?.code;
@@ -207,11 +244,12 @@ export class LLMHelper {
           throw new Error(`tool not found: name=${toolName}`);
         }
         const args = tc.function.arguments;
-        const toolArgs = JSON.parse(args);
         try {
+          const toolArgs = JSON.parse(args);
           console.log(`calling tool: name=${toolName}, args=${args}`);
           const toolResult: string = await toolFunc(toolArgs);
           console.log(`tool call result: name=${toolName}, result=${toolResult}`);
+          this.toolCallFinishHook(tc, toolResult);
           toolMsgs.push({
             role: LLMRole.Tool,
             tool_call_id: tc.id,
@@ -288,18 +326,14 @@ export class LLMHelper {
       }
       if (delta.content != null && delta.content.length > 0) {
         resContent += delta.content;
-        if (this.onDeltaHook) {
-          this.onDeltaHook(delta.content);
-        }
+        this.onDeltaHook(delta.content);
       }
       if (delta.refusal != null && delta.refusal.length > 0) {
         resRefusal += delta.refusal;
       }
     }
-    if (this.onDeltaHook) {
-      // 结束时调用一次，表示流式输出结束。
-      this.onDeltaHook(null);
-    }
+    // 结束时调用一次，表示流式输出结束。
+    this.onDeltaHook(null);
     // make final response
     const res: LLMResponse = {
       role: LLMRole.AI,
@@ -319,10 +353,19 @@ export class LLMHelper {
     if (this.apiMessages.length > this.contextMsgCnt) {
       this.apiMessages = this.apiMessages.slice(-this.contextMsgCnt);
     }
+    // Tool 消息不能作为第一条消息。
+    // find first non-tool message in this.apiMessages
+    const firstNonToolIndex = this.apiMessages.findIndex(msg => msg.role !== LLMRole.Tool);
+    if (firstNonToolIndex < 0) {
+      // 如果没有非工具消息，则清空所有消息。
+      this.apiMessages = [];
+      return;
+    }
+    this.apiMessages = this.apiMessages.slice(firstNonToolIndex);
   }
 
   private addMessage(msg: LLMMsg) {
-    if (this.addMsgHook !== undefined && this.addMsgHook(msg) === false)  {
+    if (this.addMsgHook(msg) === false)  {
       console.warn(`add message to context interrupted by hook: ${msg.content}`);
       return;
     }
