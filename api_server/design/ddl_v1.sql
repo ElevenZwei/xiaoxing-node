@@ -292,3 +292,19 @@ create table audit_log (
 );
 create index idx_audit_log_user on audit_log(user_id);
 create index idx_audit_log_type on audit_log(action_type);
+
+-- 下面两个 Table 是系统全局配置，不是用户会操作到的表格。
+-- 设备类型对应可以使用的 LLM 角色列表。
+create table llm_avatar_device_type_bind (
+    bind_id            bigint primary key,
+    device_type        integer not null references type_value_info(type_value),
+    avatar_id          bigint not null references llm_avatar_info(avatar_id) on delete cascade,
+    is_default         boolean not null default false,
+    created_at         timestamptz not null default now()
+);
+create unique index idx_avatar_device_type_default on llm_avatar_device_type_bind(device_type) where is_default = true;
+create unique index idx_avatar_device_type_bind on llm_avatar_device_type_bind(device_type, avatar_id);
+
+-- 设备类型对应可以使用的 LLM 工具列表。
+
+

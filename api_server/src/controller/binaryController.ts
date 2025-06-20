@@ -47,6 +47,53 @@ export async function uploadChatAudio(req: Request, res: Response): Promise<void
   }
 }
 
+/** Handles the request to fetch binary object info.
+  * Input format:
+    axios.get(`${API_URL}/binary/info`, {
+      params: {
+        object_id: objectId.toString(),
+      },
+    })
+  * Output format:
+    { success: boolean; error?: string; object_id: bigint; file_type: number; file_size: bigint; }
+  */
+export async function fetchBinaryObjectInfo(req: Request, res: Response): Promise<void> {
+  if (typeof req.query.object_id !== 'string') {
+    res.status(400).json({ success: false, error: 'Invalid object ID format' });
+    return;
+  }
+  const objectId = BigInt(req.query.object_id);
+  if (objectId <= 0n) {
+    res.status(400).json({ success: false, error: 'Invalid object ID' });
+    return;
+  }
+  try {
+    const bo = await BinaryService.getBinaryObjectInfoById(objectId);
+    if (!bo) {
+      res.status(404).json({ success: false, error: 'Object not found' });
+      return;
+    }
+    const answer = {
+      success: true,
+      object_id: bo.object_id.toString(),
+      file_type: bo.file_type,
+      file_size: bo.file_size.toString(),
+    };
+    res.status(200).json(answer);
+  } catch (error) {
+    console.error('Error fetching binary object info:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch binary object info' });
+  }
+}
+
+
+// 工具函数：RFC 5987 编码
+function encodeRFC5987ValueChars(str: string): string {
+  return encodeURIComponent(str)
+  .replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))
+  .replace(/%(7C|60|5E)/g, match => match.toLowerCase());
+}
+
 /** Handles the request to download a binary object.
   * Input format: 
     axios.get(`${API_URL}/binary/object`, {
@@ -74,7 +121,8 @@ export async function downloadBinaryObject(req: Request, res: Response): Promise
       return;
     }
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${bo.saveName}"`);
+    const fallbackName = 'sample' + '.' + (bo.saveName.split('.').pop() || 'bin');
+    res.setHeader('Content-Disposition', `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeRFC5987ValueChars(bo.saveName)}`);
     res.setHeader('Content-Length', bo.content.length.toString());
     res.setHeader('X-Object-ID', bo.objectId.toString());
     res.status(200).send(bo.content);
