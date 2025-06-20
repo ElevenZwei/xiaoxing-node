@@ -36,6 +36,7 @@ Type Value Table 有三个字段 value, name, meaning。
 
 0x0,     'Unknown',          '未知类型'
 0x1,     'RawText',          '表示纯文本消息'
+0x2,     'TextJson',         '表示 JSON 文本'
 
 0x10,    'AudioOpus',       'Ogg 音频文件类型'
 0x11,    'AudioOpusFrame',  'Opus 音频帧二进制数据，不能直接储存'

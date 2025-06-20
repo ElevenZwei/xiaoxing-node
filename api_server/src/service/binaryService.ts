@@ -1,8 +1,9 @@
 import prisma from '../model/prisma';
 import path from 'path';
 import fs from 'fs';
+import sanitize from 'sanitize-filename';
 
-export async function getBinaryObjectById(binaryObjectId: bigint) {
+export async function getBinaryObjectInfoById(binaryObjectId: bigint) {
   return prisma.binary_object.findUnique({
     where: { object_id: binaryObjectId },
   });
@@ -67,7 +68,7 @@ export async function uploadBinaryObject(input: UploadArgs) {
       `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
   );
   await fs.promises.mkdir(dir, { recursive: true });
-  const filePath = path.join(dir, input.saveName);
+  const filePath = path.join(dir, sanitize(input.saveName));
   await fs.promises.writeFile(filePath, input.content);
   return upsertBinaryObject(input.objectId, input.fileType, input.fileSize, filePath);
 }
@@ -107,7 +108,7 @@ export type BinaryOutput = {
 };
 
 export async function readBinaryObject(objectId: bigint): Promise<BinaryOutput> {
-  const line = await getBinaryObjectById(objectId);
+  const line = await getBinaryObjectInfoById(objectId);
   if (!line) {
     throw new Error(`Binary object with ID ${objectId} not found.`);
   }

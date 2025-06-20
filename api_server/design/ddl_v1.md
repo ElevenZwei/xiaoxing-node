@@ -195,13 +195,22 @@ LLM Avatar Info
 7. And other potential fields to configure an avatar, maybe TTS arguments.
 
 尽管系统有一个新建对话时默认的基本 AI 角色（avatar id = 0），不过用户可以把自己的 AI 角色设置成自己某个设备的默认 AI 角色。
+好像又是在 chat 层面的 bind 更加好。这样用户可以随时切换这个对话里面正在使用的 AI 角色。我也不知道到底怎么才算好。chat 层面的 bind 需要两张表格。一个是 user default ai，一个是 user-chat default ai。
 
-LLM Avatar Bind
+LLM Avatar Device Bind
 1. avatar id
 2. device id
 3. is active
 4. add timestamp
 5. remove timestamp
+
+LLM Avatar User Bind
+1. bind id
+2. user id
+3. avatar id
+
+算了，角色的功能就应该之后再设计的。这个太复杂了。
+
 
 未来多个用户共享 AI 角色的话需要的表格。
 
