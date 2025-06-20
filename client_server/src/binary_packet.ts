@@ -90,6 +90,7 @@ export class Snowflake {
 }
 
 export class BinaryPacketHeader {
+  // static readonly magic = Buffer.from('BOPK', 'ascii');
   bosid: bigint = 0n;        // 8 bytes
   size: number = 0;          // 4 bytes
   offset: number = 0;        // 4 bytes

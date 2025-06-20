@@ -3,7 +3,13 @@ import {
   LLMHelper, LLMProvider,
   LLMTool, LLMToolPrompt, LLMToolFunction, LLMToolFunctionArgs,
   LLMMsg } from '../llm_helper';
+import { TTIVolcanoHelper, TTIImageSize } from '../tti_helper';
+import fs from 'fs';
+import path from 'path';
+import { TTIToolWrapper } from '../llm_tool';
+import sanitize from 'sanitize-filename';
 
+// TODO: 这里可以让它输出内容附带的心情说明，可以是开心、悲伤、愤怒等情绪描述，辅助语音合成时的情感表达。
 const systemPrompt = 
   `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。`;
 
@@ -42,17 +48,29 @@ const weatherTool: LLMTool = {
   }
 };
 
-
+const ttiWrap = new TTIToolWrapper();
+ttiWrap.setHook(async (input, output) => {
+  const filename = sanitize(input.name || 'image') + '.jpg';
+  const data = output.image;
+  if (data == null || data.length === 0) {
+    console.error("TTIToolWrapper output image is empty or null.");
+    return output;
+  }
+  const filepath = path.join(__dirname, `../../data/media/${filename}`);
+  await fs.promises.mkdir(path.dirname(filepath), { recursive: true });
+  await fs.promises.writeFile(filepath, data);
+  return output;
+});
 
 const llm = new LLMHelper(
   LLMProvider.OpenRouter,
   'openai/gpt-4o', 20, systemPrompt,
-  [weatherTool]
+  [weatherTool, ttiWrap.tool, ]
 );
 
 llm.setOnDeltaHook((content: string | null) => {
   if (content != null) {
-    console.log(`delta: ${content}`);
+    // console.log(`delta: ${content}`);
   } else {
     console.log("delta finished.");
   }

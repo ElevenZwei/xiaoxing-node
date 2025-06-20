@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { convertWavToOpusOgg } from '../media';
+import { resizeJpeg, convertWavToOpusOgg } from '../media';
 
-async function main() {
+async function audioConvert() {
   const filename = 'asr_example_zh';
-  const inputPath = path.join(__dirname, `../data/media/${filename}.wav`);
-  const outputPath = path.join(__dirname, `../data/media/${filename}.ogg`);
+  const inputPath = path.join(__dirname, `../../data/media/${filename}.wav`);
+  const outputPath = path.join(__dirname, `../../data/media/${filename}.ogg`);
   // Read the WAV file
   const wavBuffer = fs.readFileSync(inputPath);
   console.log(`Read ${wavBuffer.length} bytes from ${inputPath}`);
@@ -17,5 +17,21 @@ async function main() {
   console.log(`Saved converted file to ${outputPath}`);
 }
 
-main().catch(console.error);
+async function imageResize() {
+  const filename = 'sample';
+  const inputPath = path.join(__dirname, `../../data/media/${filename}.jpg`);
+  const outputPath = path.join(__dirname, `../../data/media/${filename}_resized.jpg`);
+  // Read the image file
+  const imageBuffer = fs.readFileSync(inputPath);
+  console.log(`Read ${imageBuffer.length} bytes from ${inputPath}`);
+  // Resize the image (assuming a resize function exists)
+  // This is a placeholder for actual resizing logic
+  const resizedImageBuffer = await resizeJpeg(imageBuffer, { scale: 2, method: 'bicubic' });
+  // For demonstration, we'll just write the original image to the output path
+  fs.writeFileSync(outputPath, resizedImageBuffer);
+  console.log(`Saved resized image to ${outputPath}`);
+}
+
+// audioConvert().catch(console.error);
+// imageResize().catch(console.error);
 
