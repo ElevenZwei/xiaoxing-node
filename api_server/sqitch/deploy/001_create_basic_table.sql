@@ -17,6 +17,7 @@ create table binary_object (
     file_size           bigint not null,
     storage_path        text not null,
     created_at          timestamptz not null default now()
+    description         text,
 );
 create unique index idx_binary_object_path on binary_object(storage_path);
 create index idx_binary_object_type on binary_object(file_type);

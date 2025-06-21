@@ -28,6 +28,8 @@ Binary Object Table
 4. url or file path (text)
 5. mime type (text)
 6. add timestamp (timestamptz)
+7. description (text)
+这个 description 字段的作用是内容描述，例如音频资源对应的文本或者曲目名称，例如图片生成的描述。
 
 这一层是不储存文件名等等元信息的，文件名在用户的视图层面储存。用户的视图层面例如聊天记录表，是对于二进制资源的命名引用。这就像文件系统分开储存文件名和文件数据一样。
 
