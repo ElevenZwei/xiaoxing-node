@@ -30,6 +30,7 @@ model binary_object {
   file_size         BigInt
   storage_path      String              @unique(map: "idx_binary_object_path")
   created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  description       String?
   type_value_info   type_value_info     @relation(fields: [file_type], references: [type_value], onDelete: NoAction, onUpdate: NoAction)
   chat_message      chat_message[]
   llm_avatar_info   llm_avatar_info[]
