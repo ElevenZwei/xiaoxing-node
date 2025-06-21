@@ -56,8 +56,10 @@ const ttiPromptDescription =
         + '"A cozy countryside cabin surrounded by autumn trees, oil painting style, warm color palette"，'
         + '"A futuristic cityscape at night with neon lights and flying cars, in the style of Blade Runner, digital art"'
         + '"未来感十足的电动汽车概念图，银灰色，停在城市广场上，3D 渲染风"。'
-        + '注意：因为 TTI 的图像生成模型需要几秒钟生成图像，所以在调用这个工具的时候同时输出一些开始绘图的文本提示是个好主意。'
-        + '另外，当用户说想要设计图的时候，调用这个工具应当在图片描述输入中加上白色背景，自然光照，产品渲染等提示词。';
+        + '注意：因为 TTI 的图像生成模型需要几秒钟生成图像，所以在调用这个工具的时候同时输出一些开始绘图的文本是个好主意。'
+        + '另外，当用户说想要设计图的时候，调用这个工具应当在图片描述输入中加上白色背景，自然光照，产品渲染等提示词。'
+        + '这个工具会返回一个数字表示这个图像的唯一 ID，'
+        + '这个工具会自动将生成的图像显示在聊天界面中，不必接着调用显示图像的工具。';
 
 const ttiPrompt: LLMToolPrompt = {
   type: 'function',
@@ -141,4 +143,8 @@ export namespace TTIToolWrapper {
   export type Output = GenerateImageFromTextOutput;
   export type OutputHook = (input: Input, output: Output) => Promise<Output>;
 }
+
+// 设计一个显示图像的工具函数，输入代表图像的数字标志符，工具会返回图片描述，把图片显示在屏幕上。
+
+
 

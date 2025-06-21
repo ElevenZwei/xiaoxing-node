@@ -227,7 +227,7 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
         mediaData: data, // 直接上传数据
         socket,
       });
-      output.text = `图片已经创建并保存，如果有工具需要引用这张图片作为输入，你可以用这个数字字符串 "${bosid.toString()}" 来引用它。`;
+      output.text = `图片已经创建并保存，如果有工具需要引用这张图片作为输入，你可以用这个数字 ${bosid.toString()} 来引用它。`;
       clientPushImageMessage(socket, bosid);
     } catch (err) {
       console.error('Failed to save image:', err);
@@ -742,6 +742,8 @@ function clientPushAI(
     socket: WebSocket, sentence: string,
     chatId: bigint, aiMessageId: bigint) {
   console.log(`clientPushAI: ${sentence}`);
+  // TODO: 暂时在这里直接发送完整的句子。
+  clientPushSentence(socket, sentence, true);
   const msg = {
     type: 'message',
     state: 'new',
@@ -1110,7 +1112,8 @@ class LLMTTS {
     this.tts.setOnDeltaHook(this.onTTSDelta.bind(this));
     this.reader.setOnPacketHook(this.onOggPacket.bind(this));
     this.tts.setOnSentenceHook((sentence: TTSSentence, begin: boolean) => {
-      clientPushSentence(socket, sentence.text, begin);
+      // 这里暂时不推送。
+      // clientPushSentence(socket, sentence.text, begin);
     });
   }
   setMessageId(msgId: bigint, chatId: bigint) {
