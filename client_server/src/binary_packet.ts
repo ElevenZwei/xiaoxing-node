@@ -90,7 +90,7 @@ export class Snowflake {
 }
 
 export class BinaryPacketHeader {
-  // static readonly magic = Buffer.from('BOPK', 'ascii');
+  static readonly magic = Buffer.from('BOPK', 'ascii').subarray(0, 4); // 魔术字节，4 字节
   bosid: bigint = 0n;        // 8 bytes
   size: number = 0;          // 4 bytes
   offset: number = 0;        // 4 bytes
@@ -98,7 +98,7 @@ export class BinaryPacketHeader {
   isLastFrame: number = 0;   // 1 byte
   type: BOType = BOType.RawText; // 1 byte
 
-  static readonly HEADER_SIZE = 20;
+  static readonly HEADER_SIZE = 32;
 
   /** 从 Buffer 中解包 */
   static fromBuffer(buffer: Buffer): BinaryPacketHeader {
@@ -107,12 +107,17 @@ export class BinaryPacketHeader {
     }
 
     const header = new BinaryPacketHeader();
-    header.bosid = buffer.readBigUInt64BE(0);
-    header.size = buffer.readUInt32BE(8);
-    header.offset = buffer.readUInt32BE(12);
-    header.frameSize = buffer.readUInt16BE(16);
-    header.isLastFrame = buffer.readUInt8(18);
-    header.type = buffer.readUInt8(19);
+    const magic = buffer.subarray(0, 4);
+    if (!magic.equals(BinaryPacketHeader.magic)) {
+      throw new Error(`Invalid magic bytes: expected ${BinaryPacketHeader.magic.toString('hex')}, got ${magic.toString('hex')}`);
+    }
+    let cursor = BinaryPacketHeader.magic.length;
+    header.bosid = buffer.readBigUInt64BE(cursor);
+    header.size = buffer.readUInt32BE(cursor += 8);
+    header.offset = buffer.readUInt32BE(cursor += 4);
+    header.frameSize = buffer.readUInt16BE(cursor += 4);
+    header.isLastFrame = buffer.readUInt8(cursor += 2);
+    header.type = buffer.readUInt8(cursor += 1);
     return header;
   }
 
@@ -120,12 +125,15 @@ export class BinaryPacketHeader {
   toBuffer(): Buffer {
     const buffer = Buffer.alloc(BinaryPacketHeader.HEADER_SIZE);
 
-    buffer.writeBigUInt64BE(this.bosid, 0);       // offset 0
-    buffer.writeUInt32BE(this.size, 8);           // offset 8
-    buffer.writeUInt32BE(this.offset, 12);        // offset 12
-    buffer.writeUInt16BE(this.frameSize, 16);     // offset 16
-    buffer.writeUInt8(this.isLastFrame, 18);      // offset 18
-    buffer.writeUInt8(this.type, 19);             // offset 19
+    let cursor = 0;
+    buffer.set(BinaryPacketHeader.magic, cursor);              // offset 0
+    cursor += BinaryPacketHeader.magic.length;                 // 4 bytes
+    cursor = buffer.writeBigUInt64BE(this.bosid, cursor);      // offset 4
+    cursor = buffer.writeUInt32BE(this.size, cursor);          // offset 12
+    cursor = buffer.writeUInt32BE(this.offset, cursor);        // offset 16
+    cursor = buffer.writeUInt16BE(this.frameSize, cursor);     // offset 20
+    cursor = buffer.writeUInt8(this.isLastFrame, cursor);      // offset 22
+    cursor = buffer.writeUInt8(this.type, cursor);             // offset 23
 
     return buffer;
   }
