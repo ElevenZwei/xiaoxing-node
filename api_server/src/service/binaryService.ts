@@ -18,6 +18,7 @@ export async function upsertBinaryObject(
     fileType: number,
     fileSize: bigint,
     storage_path: string,
+    description: string | null,
 ) {
   return prisma.binary_object.upsert({
     where: { object_id: objectId },
@@ -25,12 +26,14 @@ export async function upsertBinaryObject(
       file_type: fileType,
       file_size: fileSize,
       storage_path,
+      description,
     },
     create: {
       object_id: objectId,
       file_type: fileType,
       file_size: fileSize,
       storage_path,
+      description,
     },
   });
 }
@@ -47,6 +50,7 @@ export type UploadArgs = {
   fileType: number;
   fileSize: bigint;
   saveName: string;
+  description: string | null;
   content: Buffer
 };
 
@@ -70,7 +74,7 @@ export async function uploadBinaryObject(input: UploadArgs) {
   await fs.promises.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, sanitize(input.saveName));
   await fs.promises.writeFile(filePath, input.content);
-  return upsertBinaryObject(input.objectId, input.fileType, input.fileSize, filePath);
+  return upsertBinaryObject(input.objectId, input.fileType, input.fileSize, filePath, input.description);
 }
 
 /**
@@ -104,6 +108,7 @@ export type BinaryOutput = {
   fileType: number;
   fileSize: number;
   saveName: string;
+  description: string | null;
   content: Buffer;
 };
 
@@ -123,6 +128,7 @@ export async function readBinaryObject(objectId: bigint): Promise<BinaryOutput> 
     fileType: line.file_type,
     fileSize: content.length,
     saveName: path.basename(filePath),
+    description: line.description,
     content,
   }
 }
