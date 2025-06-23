@@ -5,6 +5,7 @@
   * 需要安装 ffmpeg 和 fluent-ffmpeg 库。
   */
 import ffmpeg from 'fluent-ffmpeg';
+import { parseBuffer } from 'music-metadata-browser';
 import { PassThrough, Readable } from 'stream';
 import { once } from 'events';
 
@@ -76,6 +77,15 @@ export async function convertWavToOpusOgg(wavBuffer: Buffer): Promise<Buffer> {
     await once(outputStream, 'end');
     resolve(Buffer.concat(chunks));
   });
+}
+
+export async function getAudioDuration(buffer: Buffer): Promise<number> {
+  const metadata = await parseBuffer(buffer);
+  if (metadata.format.duration) {
+    return metadata.format.duration;
+  } else {
+    throw new Error('无法获取 WAV 音频的持续时间');
+  }
 }
 
 export type OggPageHeader = {

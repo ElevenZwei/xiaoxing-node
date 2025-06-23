@@ -227,10 +227,8 @@ export class LLMHelper {
       const toolCalls = message.tool_calls as OpenAI.Chat.ChatCompletionMessageToolCall[];
       // check depth.
       ++counter;
-      const toolCallStr = JSON.stringify(message.tool_calls);
-      // console.log(`handlePotentialToolCall: tool calls found, cnt=${toolCalls.length}`
-      //     + `, call=${toolCallStr}, depth=${counter}`);
       if (counter > 10) {
+        const toolCallStr = JSON.stringify(message.tool_calls);
         throw new Error(`too many tool calls, cnt=${counter}, last_call=${toolCallStr}`);
       }
       const toolMsgs: LLMMsg[] = [];

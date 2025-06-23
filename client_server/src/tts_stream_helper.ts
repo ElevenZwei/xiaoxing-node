@@ -659,6 +659,9 @@ export class TTSStreamQueue {
       this.processNext();
     }
   }
+  isEmpty(): boolean {
+    return this.queue.length === 0 && this.currentIsBusy === false;
+  }
 
   waitResponse(): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {

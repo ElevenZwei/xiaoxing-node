@@ -78,6 +78,7 @@ export async function fetchBinaryObjectInfo(req: Request, res: Response): Promis
       object_id: bo.object_id.toString(),
       file_type: bo.file_type,
       file_size: bo.file_size.toString(),
+      description: bo.description || null,
     };
     res.status(200).json(answer);
   } catch (error) {
