@@ -3,14 +3,17 @@ import fs from 'fs';
 import path from 'path';
 import sanitize from 'sanitize-filename';
 import sharp from 'sharp';
-import axios from 'axios';
-import FormData from 'form-data';
 import Denque from 'denque';
 import { Mutex } from 'async-mutex';
 
+import axios from 'axios';
+import { FormData, Blob } from 'formdata-node';
+import { FormDataEncoder } from 'form-data-encoder';
+import { Readable } from 'stream';
+
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
 import { LLMRole, LLMHelper, LLMProvider,  LLMMsg, ChunkCollector, } from './llm_helper';
-import { TTIToolWrapper } from './llm_tool';
+import { TTIToolWrapper, OpenImageTool } from './llm_tool';
 
 import * as Api from './api_query';
 import { TTSSentence, TTSStreamVolcano, TTSStreamQueue } from './tts_stream_helper';
@@ -87,6 +90,7 @@ type ObjectContext = {
 
 class DemoContext {
   clientId: bigint;
+  pingTimer: NodeJS.Timeout | null = null;
   userId: bigint = BigInt(0); // demo user id is 0
   chat: FocusChat | null = null;
 
@@ -95,12 +99,32 @@ class DemoContext {
 
   clientSampleRate: number = 16000;
   clientChannels: number = 1;
+
   llmHelper: LLMHelper;
-  pingTimer: NodeJS.Timeout | null = null;
+  llmReply: AIReply = { messageId: null, };
+  llmMutex: Mutex = new Mutex();
+  ttsSessions: LLMTTS[] = [];
 
   constructor(clientId: bigint, helper: LLMHelper) {
     this.clientId = clientId;
     this.llmHelper = helper;
+  }
+  // 清理过期的 TTS 会话。
+  clearOutdatedTTS() {
+    const res = [];
+    for (const tts of this.ttsSessions) {
+      if (tts.isEmpty() === false) {
+        // 如果 TTS 会话已经结束，清理掉。
+        res.push(tts);
+      }
+    }
+    this.ttsSessions = res;
+  }
+  // 停止 TTS 音频推送。
+  stopTTSAudioPush() {
+    for (const tts of this.ttsSessions) {
+      tts.setAudioPush(false);
+    }
   }
 };
 const wsContextMap = new WeakMap<WebSocket, DemoContext>();
@@ -116,16 +140,18 @@ function wsTextHandler(socket: WebSocket, message: string) {
   if (type === 'hello') {
     // client hello
     handleClientHello(socket, msg_json);
-    return;
   } else if (type === 'chat') {
     handleClientChat(socket, msg_json);
   } else if (type === 'listen') {
     // client listen mode change.
     handleClientListen(socket, msg_json);
-    return;
   } else if (type === 'binary') {
     // client wants to query binary packets
     handleClientBinary(socket, msg_json);
+  } else if (type === 'abort') {
+    handleClientAbort(socket, msg_json);
+  } else {
+    console.warn('Unknown message type:', type);
   }
 }
 
@@ -177,11 +203,12 @@ function wsErrorHandler(socket: WebSocket, error: Error) {
 
 function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
   const systemPrompt = 
-    `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。重复一下，你不能使用 markdown 或者任何的非口语表达，你必须输出可以念出来的内容。`;
+    `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。重复一下，你不能使用 markdown 语法记号，或者任何的非口语表达，你必须输出可以念出来的内容。`;
   const ttiWrap = new TTIToolWrapper();
+  const openImageTool = new OpenImageTool();
   const helper = new LLMHelper(
       LLMProvider.OpenRouter, 'openai/gpt-4o',
-      30, systemPrompt, [ ttiWrap.tool, ]);
+      30, systemPrompt, [ ttiWrap.tool, openImageTool.tool, ]);
 
   const context = new DemoContext(clientId, helper);
   wsContextMap.set(socket, context);
@@ -223,17 +250,41 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
         chatId: context.chat?.chatId ?? BigInt(0),
         mediaType: BOType.ImageJpeg,
         mediaObjectId: bosid,
-        mediaName: filename,
+        saveName: filename,
+        description: input.prompt || 'Generated Image',
         mediaData: data, // 直接上传数据
         socket,
       });
-      output.text = `图片已经创建并保存，如果有工具需要引用这张图片作为输入，你可以用这个数字 ${bosid.toString()} 来引用它。`;
+      output.text = JSON.stringify({
+        text: `图片已经创建并显示在聊天界面中，如果有工具需要引用这张图片作为输入，你可以用这个数字 ${bosid.toString()} 来引用它。`,
+        imageId: bosid.toString(),
+      });
       clientPushImageMessage(socket, bosid);
     } catch (err) {
       console.error('Failed to save image:', err);
       output.text = '图片保存失败，请稍后再试。';
     }
     return output;
+  });
+
+  openImageTool.setHook(async (input): Promise<OpenImageTool.Output> => {
+    const bosid = BigInt(input.imageId);
+    if (bosid === BigInt(0)) {
+      return { success: false, error: '无效的图片 ID。' };
+    }
+    // 这个消息推送是一个临时性保证 AI 调用工具顺序和客户端看到的图片顺序一致的方案。
+    // 因为 Api 返回的顺序和发起请求的顺序不一定一致。
+    clientPushImageMessage(socket, bosid);
+    const info = await Api.fetchBinaryObjectInfo(bosid);
+    if (info.success === false) {
+      console.error(`无法获取图片信息，bosid: ${bosid.toString()}, error: ${info.error}`);
+      return { success: false, error: `获取图片信息出错了。` };
+    }
+    const response: OpenImageTool.Output = {
+      success: true,
+      imageDescription: info.description ?? '暂无图片描述',
+    };
+    return response;
   });
 
   return context;
@@ -304,8 +355,7 @@ async function handleClientChat(socket: WebSocket, json: any) {
     // 清理上下文
     context.chat = null;
     return;
-  }
-  if (state === 'open') {
+  } else if (state === 'open') {
     // handle chat open
     const chatId = BigInt(json.chat_id);
     if (typeof chatId !== 'bigint') {
@@ -322,6 +372,7 @@ async function handleClientChat(socket: WebSocket, json: any) {
         chatName: 'New Chat',
         lastMessageIndex: 0, // 初始化消息索引
       };
+      console.info('Created new chat session with placeholder chatId:', context.chat.chatId);
       sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
       // clientImageTest(socket);
       return;
@@ -346,6 +397,8 @@ async function handleClientChat(socket: WebSocket, json: any) {
       sendChatOpenFailed(socket, chatId, '无法打开聊天会话，请稍后再试。');
       return;
     }
+  } else {
+    console.error('Unknown chat state:', state);
   }
 }
 
@@ -400,6 +453,16 @@ async function handleClientBinary(socket: WebSocket, json: any) {
     console.error('Error handling client binary request:', err?.message || err);
     return;
   }
+}
+
+async function handleClientAbort(socket: WebSocket, json: any) {
+  console.log('client abort request:', json);
+  const context = wsContextMap.get(socket);
+  if (context === undefined) {
+    console.error('No context found for this socket');
+    return;
+  }
+  context.stopTTSAudioPush(); // 停止 TTS 音频推送
 }
 
 /**
@@ -512,15 +575,28 @@ async function finishLastBinaryObject(context: DemoContext) {
 }
 
 type AIReply = {
-  text: string | null,
   messageId: bigint | null,
 };
 
 async function handleUserAudio(
     bo: BinaryObject, socket: WebSocket, context: DemoContext) {
+  try {
+    const duration = await bo.getAudioDuration();
+    if (duration <= 0.3) {
+      // 如果音频时长小于 0.3 秒，认为是无效的音频数据。
+      // clientPushNotify(socket, '你说话的时间太短了，机器人没能听清楚。');
+      console.info('Ignoring short audio data:', duration, 'seconds');
+      return;
+    }
+  } catch (err) {
+    console.error('Error getting audio duration:', err);
+    clientPushNotify(socket, '音频数据格式错误，请稍后再试。');
+    return;
+  }
   // STT Part
   let sentence = null;
   try {
+    // 这里 bo 是 Audio Wav 格式的音频数据。
     sentence = await localSTT(bo);
   } catch (err) {
     console.error('STT error:', err);
@@ -533,7 +609,7 @@ async function handleUserAudio(
   }
   // if (sentence.length === 0) {
   //   // demo sentence
-  //   clientPushNotify(socket, '你没有说话，只是按下了录音按钮。');
+  //   clientPushNotify(socket, '你没有说话，只是按了下录音按钮。');
   //   return;
   // }
   if (sentence.length > 2000) {
@@ -558,101 +634,117 @@ async function handleUserAudio(
     });
   }
 
-  const tts = new LLMTTS(socket);
-  // LLM 通信
-  const aiReply: AIReply = {
-    text: null,
-    messageId: null,
-  };
-
-  // 这个 messageId 是巧妙地在两个回调函数之间标记同一个回复的方法。
-  // 利用了两个 Hook 函数的调用顺序。
-  // 工具调用的申请也会有文本回复
-  context.llmHelper.setOnDeltaHook((content: string | null) => {
-    if (content !== null) {
-      // ai replies string message
-      if (aiReply.messageId === null) {
-        aiReply.messageId = generateSID();
-        tts.setMessageId(aiReply.messageId, chatId);
-      }
-      if (content.length > 0) {
-        tts.addText(content);
-      }
-    } else {
-      console.log('LLM one message finished.');
-      tts.addText(null);
-    }
+  userMessageToLLM({
+    chatId,
+    socket,
+    context,
+    sentence,
   });
-  context.llmHelper.setAddMessageHook((msg: LLMMsg) => {
-    if (msg.role === LLMRole.User) {
-      return true;
-    }
-    if ('tool_calls' in msg && msg.tool_calls != null && msg.tool_calls.length > 0) {
-      // 这时候 msg 的内容是工具调用的申请。
-      const msgId = generateSID();
-      uploadToolMessage({ msgId, chatId, msg, socket, });
-      // 调用申请可能会附带一些文本内容，这里不能返回。
-    }
-    if (msg.role === LLMRole.Tool) {
-      // 这个时候 msg 是工具调用的结果。
-      const msgId = generateSID();
-      uploadToolMessage({ msgId, chatId, msg, socket, });
-      return true;
-    }
+}
 
-    // 之后应该只有 AI 的文字回复了。
-    if (msg.role !== LLMRole.AI) {
-      console.warn(`Unexpected LLM message role: ${msg.role}`);
-      return true;
-    }
-    if (msg.content == null) {
-      return true; // 没有内容的 AI 回复，直接忽略。
-    }
-    if (typeof msg.content !== 'string') {
-      console.warn(`AI reply content is not a string: ${typeof msg.content}`);
-      return true; // 不是字符串的 AI 回复，直接忽略。
-    }
-    if (msg.content.length === 0) {
-      console.warn('AI reply content is empty, ignoring.');
-      return true; // 空内容的 AI 回复，直接忽略。
-    }
+type UserMessageToLLMParams = {
+  chatId: bigint;
+  socket: WebSocket;
+  context: DemoContext;
+  sentence: string;
+};
 
-    if (aiReply.messageId === null) {
-      // 如果有文字内容，这个时候 aiReply.messageId 还是 null，
-      // 表示还没有开始 TTS 会话，通常是哪里出错了
-      console.warn('AI reply message id is null, should not happen.');
-      return true;
-    }
-    const msgId = aiReply.messageId === null ? generateSID() : aiReply.messageId;
-    aiReply.messageId = null; // 清空 messageId，防止 setOnDeltaHook 重复使用。
+function userMessageToLLM(input: UserMessageToLLMParams) {
+  const { chatId, socket, context, sentence } = input;
+  context.llmMutex.runExclusive(async () => {
+    const tts = new LLMTTS(socket);
+    context.ttsSessions.push(tts);
 
-    clientPushAI(socket, msg.content, chatId, msgId);
-    // 上传 AI 的文本回答。
-    tts.waitResponse().then((audio: Buffer) => {
-      if (audio.length === 0) {
-        throw new Error('TTS audio is empty');
+    // 这个 messageId 是巧妙地在两个回调函数之间标记同一个回复的方法。
+    // 利用了两个 Hook 函数的调用顺序。
+    // 工具调用的申请也会有文本回复
+    context.llmHelper.setOnDeltaHook((content: string | null) => {
+      if (content !== null) {
+        // ai replies string message
+        if (context.llmReply.messageId === null) {
+          context.llmReply.messageId = generateSID();
+          tts.setMessageId(context.llmReply.messageId, chatId);
+        }
+        if (content.length > 0) {
+          tts.addText(content);
+        }
+      } else {
+        console.log('LLM one message finished.');
+        tts.addText(null);
       }
-      uploadAIMessage({ msgId, chatId, msg, audio, socket });
-    }).catch((err) => {
-      console.error('TTS error:', err);
-      clientPushNotify(socket, '语音合成没能成功。');
-      uploadAIMessage({ msgId, chatId, msg, audio: null, socket, });
     });
-    return true;
-  });
+    context.llmHelper.setAddMessageHook((msg: LLMMsg) => {
+      if (msg.role === LLMRole.User) {
+        return true;
+      }
+      if ('tool_calls' in msg && msg.tool_calls != null && msg.tool_calls.length > 0) {
+        // 这时候 msg 的内容是工具调用的申请。
+        const msgId = generateSID();
+        uploadToolMessage({ msgId, chatId, msg, socket, });
+        // 调用申请可能会附带一些文本内容，这里不能返回。
+      }
+      if (msg.role === LLMRole.Tool) {
+        // 这个时候 msg 是工具调用的结果。
+        const msgId = generateSID();
+        uploadToolMessage({ msgId, chatId, msg, socket, });
+        return true;
+      }
 
-  try {
-    // TODO: 防止 AI 单词过多，超过 2000 个字符。
-    const lastText = await context.llmHelper.nextTextReply(sentence);
-    if (lastText == null || lastText.length === 0) {
-      // AI 没有给出回答。
-      clientPushNotify(socket, 'AI 没有给出回答。');
-      return;
+      // 之后应该只有 AI 的文字回复了。
+      if (msg.role !== LLMRole.AI) {
+        console.warn(`Unexpected LLM message role: ${msg.role}`);
+        return true;
+      }
+      if (msg.content == null) {
+        return true; // 没有内容的 AI 回复，直接忽略。
+      }
+      if (typeof msg.content !== 'string') {
+        console.warn(`AI reply content is not a string: ${typeof msg.content}`);
+        return true; // 不是字符串的 AI 回复，直接忽略。
+      }
+      if (msg.content.length === 0) {
+        console.warn('AI reply content is empty, ignoring.');
+        return true; // 空内容的 AI 回复，直接忽略。
+      }
+
+      if (context.llmReply.messageId === null) {
+        // 如果有文字内容，这个时候 llmReply.messageId 还是 null，
+        // 表示还没有开始 TTS 会话，通常是哪里出错了
+        console.warn('AI reply message id is null, should not happen.');
+        return true;
+      }
+      const msgId = context.llmReply.messageId ?? generateSID();
+      context.llmReply.messageId = null; // 清空 messageId，防止 setOnDeltaHook 重复使用。
+
+      clientPushAI(socket, msg.content, chatId, msgId);
+      // 上传 AI 的文本回答。
+      tts.waitResponse().then((audio: Buffer) => {
+        if (audio.length === 0) {
+          throw new Error('TTS audio is empty');
+        }
+        uploadAIMessage({ msgId, chatId, msg, audio, socket });
+      }).catch((err) => {
+        console.error('TTS error:', err);
+        clientPushNotify(socket, '语音合成没能成功。');
+        uploadAIMessage({ msgId, chatId, msg, audio: null, socket, });
+      });
+      return true;
+    });
+
+    try {
+      // TODO: 防止 AI 单词过多，超过 2000 个字符。
+      const lastText = await context.llmHelper.nextTextReply(sentence);
+      context.clearOutdatedTTS();
+      if (lastText == null || lastText.length === 0) {
+        // AI 没有给出回答。
+        clientPushNotify(socket, 'AI 没有给出回答。');
+        return;
+      }
+    } catch (err) {
+      clientPushNotify(socket, 'AI 不愿意回答你的想法。');
+      throw err;
     }
-  } catch (err) {
-    clientPushNotify(socket, 'AI 不愿意回答你的想法。');
-    throw err;
-  }
+  });
 }
 
 async function localSTT(bo: BinaryObject): Promise<null | string> {
@@ -889,16 +981,15 @@ async function clientImageTest(socket: WebSocket) {
 
 /**/
 async function runASR(bosid: bigint, audio: Buffer) {
+  // TODO: check output json format.
   const form = new FormData();
-  form.append('audio', audio, {
-    filename: 'asr.wav',
-    contentType: 'audio/wav',
-  });
-  return axios.post(ASR_URL, form, {
+  form.set('audio', new Blob([audio], { type: 'audio/wav' }), 'asr.wav');
+  const encoder = new FormDataEncoder(form);
+  return axios.post(ASR_URL, Readable.from(encoder.encode()), {
     headers: {
       'X-Task-Id': bosid.toString(),
       'X-language': 'zh',
-      ...form.getHeaders(),
+      ...encoder.headers,
     },
   }).then(response => response.data).catch(error => {
     console.error('Error during ASR request:', error);
@@ -910,7 +1001,7 @@ type UploadUserMessageInput = {
   msgId: bigint;
   chatId: bigint;
   userId: bigint;
-  audio: BinaryObject;
+  audio?: BinaryObject;
   sentence: string;
   socket: WebSocket;
 };
@@ -927,12 +1018,16 @@ function uploadUserMessage(input: UploadUserMessageInput) {
       console.error('Failed to insert user message:', res.error);
       return;
     }
-    console.log('user message inserted successfully:', res);
+    console.info('user message inserted successfully:', res);
     clientPushMessageIndex(input.socket, res);
     // 上传音频。
     // convert wav to ogg.
+    if (input.audio === undefined || input.audio.size === 0) {
+      console.info('User audio data is empty, skipping upload.');
+      return;
+    }
     const oggBuf = await input.audio.toOggBuffer();
-    const resp = await Api.uploadChatAudio(input.msgId, `${input.msgId}.ogg`, oggBuf);
+    const resp = await Api.uploadChatAudio(input.msgId, `${input.msgId}.ogg`, input.sentence, oggBuf);
     if (!resp.success) {
       console.error('Failed to upload user audio:', resp.error);
       return;
@@ -954,12 +1049,17 @@ function uploadAIMessage(input: UploadAIMessageInput) {
   (async () => {
     // 这里的 msg.role 是 LLMRole.AI 或者 LLMRole.Tool 或者 LLMRole.System。
     const role = input.msg.role;
+    const sentence: string = input.msg.content as string;
+    if (typeof sentence !== 'string') {
+      console.error(`AI message content is not a string: ${typeof sentence}, should not happen.`);
+      return;
+    }
     const res = await Api.newTextMessage({
       messageId: input.msgId,
       chatId: input.chatId,
       senderType: llmMsgToSenderType(role),
       senderId: BigInt(1),  // TODO: 这里替换成 AI Avatar 的 ID。
-      content: input.msg.content as string,
+      content: sentence,
     });
     if (!res.success) {
       console.error('Failed to upload AI message:', res.error);
@@ -974,7 +1074,8 @@ function uploadAIMessage(input: UploadAIMessageInput) {
         console.warn('AI audio data is null, skipping upload.');
         return;
       }
-      const resp = await Api.uploadChatAudio(input.msgId, `${input.msgId}.ogg`, input.audio)
+      const resp = await Api.uploadChatAudio(
+        input.msgId, `${input.msgId}.ogg`, sentence, input.audio)
       if (!resp.success) {
         console.error('Failed to upload AI audio:', resp.error);
         return;
@@ -1032,7 +1133,8 @@ type UploadMediaMessageInput = {
   chatId: bigint;
   mediaType: BOType;
   mediaObjectId: bigint;
-  mediaName: string;
+  saveName: string;
+  description?: string; // 可选的描述信息
   mediaData?: Buffer; // 可选的媒体数据，如果有的话直接上传，空的话表示引用现有的 media 对象。
   socket: WebSocket;
 }
@@ -1042,7 +1144,7 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
     if (input.mediaData) {
       const res = await Api.uploadBinaryObject(
         input.mediaObjectId, input.mediaType,
-        input.mediaName, input.mediaData);
+        input.saveName, input.description, input.mediaData);
       if (!res.success) {
         console.error('Failed to upload media object:', res.error);
         throw new Error(`Failed to upload media object: ${res.error}`);
@@ -1058,7 +1160,7 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
       senderId: BigInt(1), // TODO: 这里替换成 AI Avatar 的 ID。
       mediaType: input.mediaType,
       mediaObjectId: input.mediaObjectId,
-      mediaName: input.mediaName,
+      mediaName: input.saveName,
     });
     if (!res.success) {
       console.error('Failed to upload media message:', res.error);
@@ -1096,6 +1198,8 @@ class LLMTTS {
   private messageId: bigint = BigInt(0);
   private chatId: bigint = BigInt(0); // 当前聊天的 ID
   private chunkIndex: number = 0;
+
+  private enableAudioPush: boolean = true; // 是否允许推送音频数据
   // audio queue 是等待推送给客户端的音频数据。
   // 它是一个 OggPacket 数组，表示按每次的发送量合并后的音频数据包。
   // 因为客户端的音频队列长度有限，所以较长的音频数据需要分批发送。
@@ -1116,12 +1220,20 @@ class LLMTTS {
       // clientPushSentence(socket, sentence.text, begin);
     });
   }
+  isEmpty(): boolean { return this.tts.isEmpty() && this.audioQueue.length === 0; }
   setMessageId(msgId: bigint, chatId: bigint) {
     this.messageId = msgId;
     this.chatId = chatId;
     this.chunkIndex = 0;
   }
   setSpeaker(speaker: string) { this.ttsSpeaker = speaker; }
+  setAudioPush(enable: boolean) {
+    this.enableAudioPush = enable;
+    if (enable) {
+      console.log('Audio push enabled.');
+      this.pushQueue(Buffer.alloc(0)); // 触发一次音频发送
+    }
+  }
   addText(text: string | null) {
     this.collector.addText(text);
   }
@@ -1147,6 +1259,7 @@ class LLMTTS {
       this.flushOggPacketCache();
       return;
     }
+    // 这个是同步的，直接回调 onOggPacket。
     this.reader.readData(data);
   }
   private onOggPacket(packet: OggPacket, _header: OggPageHeader) {
@@ -1163,13 +1276,16 @@ class LLMTTS {
     if (this.packetCache.length === 0) { return; }
     const merged: OggPacket = OggPacket.mergePackets(this.packetCache);
     this.packetCache = []; // Clear the cache
-    console.log(`Flushing OggPacket with length ${merged.length} to client.`);
-    // 推给客户端之前需要延时等到正确的时间点。
-    this.pushQueue(merged);
+    if (this.enableAudioPush) {
+      // 推给客户端之前需要延时等到正确的时间点。
+      console.log(`Flushing OggPacket with length ${merged.length} to client.`);
+      this.pushQueue(merged);
+    }
   }
 
   private pushQueue(packet: OggPacket) {
-    this.audioQueue.push(packet);
+    if (packet.length > 0)
+      this.audioQueue.push(packet);
     if (this.queueTimer === null) {
       this.pushTTSStart();
       this.triggerSendAudio();
@@ -1177,8 +1293,12 @@ class LLMTTS {
   }
 
   // 函数的规则是如果队列有成员，那么推送一个包裹并且设置一个定时器，
-  // 经过 98% 的播放时间之后再次触发这个函数。
+  // 经过 92% 的播放时间之后再次触发这个函数。
   private triggerSendAudio() {
+    if (this.enableAudioPush === false) {
+      // 不要推送音频或者控制数据，保持静默状态。
+      return;
+    }
     if (this.audioQueue.length === 0) {
       console.log('Audio queue is empty, stopping timer.');
       this.clearTimer();
@@ -1188,7 +1308,7 @@ class LLMTTS {
     // cannot be undefined, because we check length above.
     const packet: OggPacket = this.audioQueue.shift() as OggPacket;
     const audioTime = 60; // TODO: 计算音频包的播放时间
-    this.resetTimer(audioTime * 0.98);
+    this.resetTimer(audioTime * 0.92);
     clientPushAudio(this.socket, packet);
   }
 

@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { AxiosError } from 'axios';
-import FormData from 'form-data';
+import { FormData, Blob } from 'formdata-node';
+import { FormDataEncoder } from 'form-data-encoder';
+import { Readable } from 'stream';
 import { BOType } from './binary_packet';
 
 const API_URL = 'http://localhost:6810'; // Example API URL for creating new chat
@@ -16,8 +18,7 @@ export type UserOpenChatResponse = {
 };
 
 export async function userNewChat(
-    userId: bigint, chatId: bigint, prefix: string = 'New Chat')
-: Promise<UserOpenChatResponse> {
+    userId: bigint, chatId: bigint, prefix: string = 'New Chat'): Promise<UserOpenChatResponse> {
   console.log(`Creating new chat for user ${userId} with chat ID ${chatId} and prefix "${prefix}"`);
   // This function should create a new chat session for the user
   // For now, we return a placeholder
@@ -43,8 +44,8 @@ export async function userNewChat(
   });
 }
 
-export async function userOpenExChat(userId: bigint, chatId: bigint)
-: Promise<UserOpenChatResponse> {
+export async function userOpenExChat(userId: bigint, chatId: bigint):
+  Promise<UserOpenChatResponse> {
   console.log(`Opening existing chat for user ${userId} with chat ID ${chatId}`);
   // This function should retrieve the user's open chat session.
   // For now, we return a placeholder
@@ -75,16 +76,16 @@ export type BinaryObjectUploadResponse = {
   object_id: bigint;
 };
 export async function uploadBinaryObject(
-    objectId: bigint, fileType: number, saveName: string, content: Buffer) {
-  return uploadBinaryObjectImpl('object', objectId, fileType, saveName, content);
+    objectId: bigint, fileType: number, saveName: string, description: string | undefined, content: Buffer) {
+  return uploadBinaryObjectImpl('object', objectId, fileType, saveName, description, content);
 };
-export async function uploadChatAudio(objectId: bigint, saveName: string, content: Buffer) {
-  return uploadBinaryObjectImpl('audio', objectId, BOType.AudioOpus, saveName, content);
+export async function uploadChatAudio(objectId: bigint, saveName: string, description: string | undefined, content: Buffer) {
+  return uploadBinaryObjectImpl('audio', objectId, BOType.AudioOpus, saveName, description, content);
 }
 async function uploadBinaryObjectImpl(
     urlPart: 'object' | 'audio',
     objectId: bigint, fileType: number,
-    saveName: string, content: Buffer)
+    saveName: string, description: string | undefined, content: Buffer)
 : Promise<BinaryObjectUploadResponse> {
   console.log(`Uploading binary object with ID ${objectId}, type ${fileType}`
               + `, size ${content.length}, name "${saveName}"`);
@@ -95,17 +96,16 @@ async function uploadBinaryObjectImpl(
   //   object_id: objectId,
   // };
   const form = new FormData();
-  form.append('object_id', objectId.toString());
-  form.append('file_type', fileType.toString());
-  form.append('file_size', content.length.toString());
-  form.append('content', content, {
-    filename: saveName,
-    contentType: 'application/octet-stream',
-  });
-  return axios.post(`${API_URL}/binary/${urlPart}`, form, {
-      headers: {
-        ...form.getHeaders(),
-      },
+  form.set('object_id', objectId.toString());
+  form.set('file_type', fileType.toString());
+  form.set('file_size', content.length.toString());
+  if (description != null && description.length > 0) {
+    form.append('description', description);
+  }
+  form.set('content', new Blob([content], { type: 'application/octet-stream' }), saveName);
+  const encoder = new FormDataEncoder(form);
+  return axios.post(`${API_URL}/binary/${urlPart}`, Readable.from(encoder.encode()), {
+      headers: encoder.headers,
   }).then(response => response.data).catch((error: AxiosError) => {
     console.error('Error uploading BinaryObject:', error.message);
     const data = error.response?.data as (BinaryObjectUploadResponse | undefined);
@@ -142,10 +142,11 @@ export async function downloadBinaryObject(objectId: bigint): Promise<BinaryObje
 
 export type BinaryObjectInfoResponse = {
   success: boolean;
-  error?: string; // Optional error message
-  object_id: bigint; // BinaryObject ID
-  file_type: number; // File type (e.g., image, audio, video)
-  file_size: number; // Size of the file in bytes
+  error?: string;       // Optional error message
+  object_id: bigint;    // BinaryObject ID
+  file_type: number;    // File type (e.g., image, audio, video)
+  file_size: number;    // Size of the file in bytes
+  description?: string; // Optional description of the object
 }
 export async function fetchBinaryObjectInfo(objectId: bigint): Promise<BinaryObjectInfoResponse> {
   console.log(`Fetching info for binary object with ID ${objectId}`);
@@ -155,6 +156,10 @@ export async function fetchBinaryObjectInfo(objectId: bigint): Promise<BinaryObj
     },
   }).then(response => response.data).catch((error: AxiosError) => {
     console.error('Error fetching BinaryObject info:', error.message);
+    const data = error.response?.data as (BinaryObjectInfoResponse | undefined);
+    if (data != null && data.success === false) {
+      return data;
+    }
     throw error;
   });
 }

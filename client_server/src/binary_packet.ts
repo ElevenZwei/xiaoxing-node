@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { Mutex } from 'async-mutex';
 import { OpusDecoderSampleRate, OpusDecoderWebWorker } from 'opus-decoder';
-import { convertWavToOpusOgg } from './media';
+import { convertWavToOpusOgg, getAudioDuration } from './media';
 
 // 定义 BOSIZE_UNKNOWN 常量，表示未知大小
 export const BOSIZE_UNKNOWN = 0xFFFFFFFF;
@@ -411,6 +411,17 @@ export class BinaryObject {
       return this.buf.subarray(0, this.cursor);
     } else {
       return this.buf.subarray(0, this.size);
+    }
+  }
+
+  async getAudioDuration(): Promise<number> {
+    if (this.isComplete() === false) {
+      throw new Error("BinaryObject is not complete, cannot get duration");
+    }
+    if (this.type === BOType.AudioOpus || this.type === BOType.AudioWav) {
+      return await getAudioDuration(this.getData());
+    } else {
+      throw new Error(`Cannot get duration for non-audio type: ${BOTypeToString(this.type)}`);
     }
   }
 
