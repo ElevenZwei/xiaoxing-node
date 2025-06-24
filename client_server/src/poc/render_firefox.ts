@@ -11,11 +11,25 @@ const outputPath = path.resolve(__dirname, '../../data/output.jpg');
   page.on('pageerror', err => console.error('PAGE ERROR:', err));
 
   // 1. Load local HTML file
-//   await page.goto('http://localhost:17700/index.html');
   await page.goto('file://' + path.resolve(__dirname, 'temp-glb-viewer/index.html'));
 
   // 2. Wait for render complete signal
-  await page.waitForFunction('window.__RENDER_DONE__ === true', { timeout: 10000 });
+  await page.evaluate(({ pitch, yaw, timeoutMs }) => {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`render-done event timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      window.addEventListener('render-done', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+
+      if (typeof (window as any).setOrbit === 'function') {
+        (window as any).setOrbit(pitch, yaw);
+      }
+    });
+  }, { pitch: 30, yaw: 90, timeoutMs: 5000 });
 
   // 3. Screenshot the canvas or full page
   const canvas = await page.$('canvas');
