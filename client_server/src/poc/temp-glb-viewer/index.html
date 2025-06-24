@@ -11,26 +11,100 @@
       import * as THREE from './libs/three/three.mjs';
       import { GLTFLoader } from './libs/three/examples/jsm/loaders/GLTFLoader.mjs';
 
-      const width = 512;
-      const height = 512;
+      // 还原 Windows 3D Viewer 的灯光配置
+      function applyWindows3DViewerLighting(scene) {
+        const lightIntensity = 1.5;
+        // 从配置还原的灯光信息
+        const lightConfigs = [
+          {
+            color: new THREE.Color(151 / 255, 199 / 255, 201 / 255),
+            intensity: 111 / 100 * lightIntensity,
+            direction: new THREE.Vector3(0, 1, 1), // Light0：前上
+          },
+          {
+            color: new THREE.Color(255 / 255, 251 / 255, 232 / 255),
+            intensity: 92 / 100 * lightIntensity,
+            direction: new THREE.Vector3(-1, 1, -0.5), // Light1：左后上
+          },
+          {
+            color: new THREE.Color(255 / 255, 248 / 255, 239 / 255),
+            intensity: 43 / 100 * lightIntensity,
+            direction: new THREE.Vector3(0.5, -1, -1), // Light2：右后下
+          },
+        ];
+
+        // 环境光（Environment）
+        const ambientLight = new THREE.AmbientLight(
+          new THREE.Color(211 / 255, 211 / 255, 211 / 255),
+          103 / 100 * lightIntensity,
+        );
+        scene.add(ambientLight);
+
+        // 所有方向光统一绕 Y 轴旋转的角度
+        const lightRotationDeg = 120;
+        const lightRotationRad = (lightRotationDeg * Math.PI) / 180;
+
+        lightConfigs.forEach(({ color, intensity, direction }) => {
+          const rotatedDirection = direction
+            .clone()
+            .applyAxisAngle(new THREE.Vector3(0, 1, 0), lightRotationRad)
+            .normalize();
+
+          const light = new THREE.DirectionalLight(color, intensity);
+          light.position.copy(rotatedDirection.multiplyScalar(5));
+          scene.add(light);
+        });
+      }
+
+      function positionModelToCenter(model) {
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center); // 将模型中心移到原点
+      }
+      function getCameraDistance(camera, model, scale = 1.2) {
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = camera.fov * (Math.PI / 180); // 转换为弧度
+        const boundingRadius = maxDim / 2;
+        // scale 是一个安全系数，确保模型完全可见
+        const distance = boundingRadius / Math.sin(fov / 2) * scale;
+        return distance;
+      }
+      function setCameraOrbit(camera, distance, pitchDeg, yawDeg) {
+        const pitchRad = (pitchDeg * Math.PI) / 180;
+        const yawRad = (yawDeg * Math.PI) / 180;
+
+        camera.position.x = distance * Math.cos(pitchRad) * Math.sin(yawRad);
+        camera.position.y = distance * Math.sin(pitchRad);
+        camera.position.z = distance * Math.cos(pitchRad) * Math.cos(yawRad);
+        camera.lookAt(0, 0, 0);
+      }
+
+      const width = 1024;
+      const height = 1024;
 
       const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
       renderer.setSize(width, height);
       document.body.appendChild(renderer.domElement);
 
       const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xF5F5F5); // 设置背景色为 Windows 3D Viewer 的浅灰色
+      scene.fog = new THREE.FogExp2(0xF5F5F5, 0.01); // 设置雾效
+      applyWindows3DViewerLighting(scene);
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-      camera.position.set(3, 3, 3);
-      camera.lookAt(0, 0, 0);
-
-      const light = new THREE.DirectionalLight(0xffffff, 2);
-      light.position.set(5, 5, 5);
-      scene.add(light);
 
       const loader = new GLTFLoader();
       loader.load('duck.glb', (gltf) => {
-        scene.add(gltf.scene);
+        const model = gltf.scene;
+        positionModelToCenter(model);
+        const distance = getCameraDistance(camera, model, 1.2);
+        console.log('Camera distance:', distance);
+        setCameraOrbit(camera, distance, 20, 90); // 设置相机位置和朝向
+        scene.add(model);
         renderer.render(scene, camera);
+        console.log('Model loaded and rendered successfully.');
+        window.dispatchEvent(new Event('render-done'));
         window.__RENDER_DONE__ = true;
       });
     </script>
