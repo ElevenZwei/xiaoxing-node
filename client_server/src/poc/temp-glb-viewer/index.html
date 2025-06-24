@@ -1,0 +1,38 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>GLB Viewer</title>
+    <style>body { margin: 0; }</style>
+  </head>
+  <body>
+    <script type="module">
+      import * as THREE from './libs/three/three.mjs';
+      import { GLTFLoader } from './libs/three/examples/jsm/loaders/GLTFLoader.mjs';
+
+      const width = 512;
+      const height = 512;
+
+      const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
+      renderer.setSize(width, height);
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+      camera.position.set(2, 2, 2);
+      camera.lookAt(0, 0, 0);
+
+      const light = new THREE.DirectionalLight(0xffffff, 1);
+      light.position.set(5, 5, 5);
+      scene.add(light);
+
+      const loader = new GLTFLoader();
+      loader.load('duck.glb', (gltf) => {
+        scene.add(gltf.scene);
+        renderer.render(scene, camera);
+        window.__RENDER_DONE__ = true;
+      });
+    </script>
+  </body>
+</html>
