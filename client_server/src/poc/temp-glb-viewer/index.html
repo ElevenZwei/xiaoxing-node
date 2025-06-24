@@ -87,25 +87,27 @@
       const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
       renderer.setSize(width, height);
       document.body.appendChild(renderer.domElement);
+      const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xF5F5F5); // 设置背景色为 Windows 3D Viewer 的浅灰色
       scene.fog = new THREE.FogExp2(0xF5F5F5, 0.01); // 设置雾效
       applyWindows3DViewerLighting(scene);
-      const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
 
       const loader = new GLTFLoader();
       loader.load('duck.glb', (gltf) => {
         const model = gltf.scene;
         positionModelToCenter(model);
+        scene.add(model);
+
         const distance = getCameraDistance(camera, model, 1.2);
         console.log('Camera distance:', distance);
-        setCameraOrbit(camera, distance, 20, 90); // 设置相机位置和朝向
-        scene.add(model);
-        renderer.render(scene, camera);
-        console.log('Model loaded and rendered successfully.');
-        window.dispatchEvent(new Event('render-done'));
-        window.__RENDER_DONE__ = true;
+        window.setOrbit = (pitchDeg, yawDeg) => {
+          setCameraOrbit(camera, distance, pitchDeg, yawDeg);
+          renderer.render(scene, camera);
+          console.log('Model loaded and rendered successfully.');
+          window.dispatchEvent(new Event('render-done'));
+        };
       });
     </script>
   </body>
