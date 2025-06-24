@@ -72,6 +72,7 @@ async function renderGLBToJPEG(glbPath: string, outputPath: string) {
   console.log(`🔄 Rendering ${glbPath} to ${outputPath}`);
   page.on('console', msg => console.log('PAGE LOG:', msg.text()));
   page.on('pageerror', err => console.error('PAGE ERROR:', err));
+  // chromium does not support file:// URLs directly, so we use a local server
   await page.goto(`http://localhost:17700/index.html`);
   await page.waitForFunction('window.__RENDER_DONE__ === true', { timeout: 30000 });
   await new Promise((r) => setTimeout(r, 500));
