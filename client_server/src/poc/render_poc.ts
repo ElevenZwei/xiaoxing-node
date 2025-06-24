@@ -26,10 +26,10 @@ const htmlTemplate = `
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-      camera.position.set(2, 2, 2);
+      camera.position.set(3, 3, 3);
       camera.lookAt(0, 0, 0);
 
-      const light = new THREE.DirectionalLight(0xffffff, 1);
+      const light = new THREE.DirectionalLight(0xffffff, 2);
       light.position.set(5, 5, 5);
       scene.add(light);
 
@@ -55,7 +55,6 @@ async function renderGLBToJPEG(glbPath: string, outputPath: string) {
       '--enable-unsafe-swiftshader',
       '--no-sandbox',
       '--disable-gpu',
-      // '--enable-unsafe-webgpu',
     ]
   });
   console.log(`🔄 Launching Puppeteer browser... done`);
@@ -74,7 +73,6 @@ async function renderGLBToJPEG(glbPath: string, outputPath: string) {
   page.on('console', msg => console.log('PAGE LOG:', msg.text()));
   page.on('pageerror', err => console.error('PAGE ERROR:', err));
   await page.goto(`http://localhost:17700/index.html`);
-  console.log('Waiting for GLB to load and render...');
   await page.waitForFunction('window.__RENDER_DONE__ === true', { timeout: 30000 });
   await new Promise((r) => setTimeout(r, 500));
 
