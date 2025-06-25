@@ -12,24 +12,31 @@ const outputPath = path.resolve(__dirname, '../../data/output.jpg');
 
   // 1. Load local HTML file
   await page.goto('file://' + path.resolve(__dirname, 'temp-glb-viewer/index.html'));
+  await page.waitForLoadState('networkidle');
+  console.log('✅ Loaded HTML file');
 
-  // 2. Wait for render complete signal
-  await page.evaluate(({ pitch, yaw, timeoutMs }) => {
+  await page.evaluate(() => {
     return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`render-done event timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      window.addEventListener('render-done', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
-
-      if (typeof (window as any).setOrbit === 'function') {
-        (window as any).setOrbit(pitch, yaw);
+      setTimeout(() => {
+        reject(new Error('Initialization timeout after 5000ms'));
+      }, 5000);
+      if (typeof (window as any).initCanvas === 'function') {
+        (window as any).initCanvas(1024, 1024);
+        resolve((window as any).loadModel('./duck.glb'));
+      } else {
+        reject(new Error('initCanvas function not found'));
       }
     });
-  }, { pitch: 30, yaw: 90, timeoutMs: 5000 });
+  });
+
+  // 2. Wait for render complete signal
+  await page.evaluate(({ pitch, yaw }) => {
+    if (typeof (window as any).setOrbit === 'function') {
+      (window as any).setOrbit(pitch, yaw);
+    } else {
+      throw (new Error('setOrbit function not found'));
+    }
+  }, { pitch: 30, yaw: 155 });
 
   // 3. Screenshot the canvas or full page
   const canvas = await page.$('canvas');
