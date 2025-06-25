@@ -9,10 +9,11 @@
     <script type="module">
       import * as THREE from './libs/three/three.mjs';
       import { GLTFLoader } from './libs/three/examples/jsm/loaders/GLTFLoader.mjs';
+      import { RGBELoader } from './libs/three/examples/jsm/loaders/RGBELoader.mjs';
 
       // 还原 Windows 3D Viewer 的灯光配置
       function applyWindows3DViewerLighting(scene) {
-        const lightIntensity = 1.5;
+        const lightIntensity = 1;
         // 从配置还原的灯光信息
         const lightConfigs = [
           {
@@ -50,7 +51,7 @@
             .normalize();
 
           const light = new THREE.DirectionalLight(color, intensity);
-          light.position.copy(rotatedDirection.multiplyScalar(5));
+          light.position.copy(rotatedDirection.multiplyScalar(10));
           scene.add(light);
         });
       }
@@ -84,6 +85,9 @@
         const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
         context.renderer = renderer;
         renderer.setSize(width, height);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // 使用 ACES 色调映射
+        renderer.outputEncoding = THREE.sRGBEncoding; // 设置输出编码为 sRGB
+        renderer.shadowMap.enabled = true; // 启用阴影贴图
         document.body.appendChild(renderer.domElement);
         context.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
 
@@ -92,6 +96,18 @@
         scene.background = new THREE.Color(0xF5F5F5); // 设置背景色为 Windows 3D Viewer 的浅灰色
         scene.fog = new THREE.FogExp2(0xF5F5F5, 0.01); // 设置雾效
         applyWindows3DViewerLighting(scene);
+
+        return new Promise((resolve, reject) => {
+            new RGBELoader()
+              .load('citrus_orchard_road_puresky_1k.hdr', (texture) => {
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                scene.environment = texture; // 设置环境贴图
+                resolve(context);
+            }, undefined, (error) => {
+              console.error('Error loading HDR texture:', error);
+              reject(error);
+            });
+          });
       }
       function loadModel(url) {
         return new Promise((resolve, reject) => {
@@ -102,6 +118,27 @@
               const model = gltf.scene;
               positionModelToCenter(model);
               context.scene.add(model);
+                model.traverse((child) => {
+                  if (child.isMesh) {
+                    // child.castShadow = true;
+                    // child.receiveShadow = true;
+                    // console.log('Mesh found:', child.name);
+                    // console.log('Material:', JSON.stringify(child.material, (key, value) => {
+                    //   if (value instanceof THREE.Color) {
+                    //     return value.getHexString(); // 转换颜色为十六进制字符串
+                    //   }
+                    //   if (value instanceof THREE.Texture) return `[Texture: ${value.name || value.uuid}]`;
+                    //   if (value instanceof HTMLImageElement) return '[Image]';
+                    //   if (key === 'url' && typeof value === 'string' && value.startsWith('data:')) {
+                    //     return '[Data URL]'; // 避免输出过长的 Data URL
+                    //   }
+                    //   return value; // 其他值保持不变
+                    // }, 2));
+                    // child.material.metalness = 0.0; // 设置金属度
+                    // child.material.roughness = 0.5; // 设置粗糙度
+                    // child.material.needsUpdate = true; // 确保材质更新
+                  }
+                });
 
               const distance = getCameraDistance(context.camera, model, 1.2);
               console.log('Camera distance:', distance);
