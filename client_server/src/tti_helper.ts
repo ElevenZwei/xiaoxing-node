@@ -200,12 +200,12 @@ export class TTIVolcanoHelper {
         },
       }
     );
-    if (response.status !== 200) {
-      throw new Error(`Failed to generate image: ${response.statusText}`);
-    }
     const data = response.data;
-    if (data.error) {
-      throw new Error(`Error from Volcano API: ${data.error.message}`);
+    if (typeof data.error === 'object' && data.error !== null) {
+      throw new Error(`Error from Volcano API code: ${data.error.code}, msg: ${data.error.message}`);
+    }
+    if (response.status !== 200) {
+      throw new Error(`Failed to generate image and no message: ${response.statusText}`);
     }
     if (!data.data || data.data.length === 0) {
       throw new Error('No images generated');
