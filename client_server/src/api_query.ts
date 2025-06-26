@@ -212,7 +212,7 @@ export type NewMediaMessageInput = {
   senderId: bigint;
   mediaType: number; // e.g., image, audio, video
   mediaObjectId: bigint; // ID of the uploaded media object
-  mediaName: string; // Name of the media file
+  mediaName?: string; // Name of the media file
 };
 export async function newMediaMessage(input: NewMediaMessageInput):
   Promise<NewMessageResponse> {

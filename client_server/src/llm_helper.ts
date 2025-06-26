@@ -348,6 +348,7 @@ export class LLMHelper {
   }
 
   private checkMessageLimit() {
+    // TODO: 分离 Tool 消息的计数和用户消息的计数。
     if (this.apiMessages.length > this.contextMsgCnt) {
       this.apiMessages = this.apiMessages.slice(-this.contextMsgCnt);
     }
