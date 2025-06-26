@@ -51,6 +51,11 @@ create index idx_chat_message_sender on chat_message(sender_type, sender_id);
 create index idx_chat_message_object on chat_message(binary_object_id);
 create index idx_chat_message_fulltext on chat_message using gin(text_content_tsv);
 
+create table chat_message_counter (
+  chat_id       bigint primary key,
+  current_index integer not null
+);
+
 -- 创建触发器函数，用于在插入或更新时自动更新全文搜索向量
 create function chat_message_tsvector_trigger() returns trigger as $$
 begin
@@ -58,32 +63,41 @@ begin
     return new;
 end;
 $$ language plpgsql;
+
 create trigger trg_chat_message_tsvector
     before insert or update on chat_message
     for each row execute function chat_message_tsvector_trigger();
 
 -- 创建触发器函数，设置自增的 message_index，确保 unique(chat_id, message_index) 唯一性约束。
-create function chat_message_index_trigger() returns trigger as $$
+create or replace function chat_message_index_trigger() returns trigger as $$
+declare
+    next_index integer;
 begin
     if new.message_index is null then
-        begin
-            -- lock the row with given chat_id and max message_index,
-            -- to ensure no concurrent inserts can cause duplicate message_index.
-            select message_index into strict new.message_index
-            from chat_message
-            where chat_id = new.chat_id
-            order by message_index desc
-            limit 1 for update;
-            new.message_index := new.message_index + 1;
+        update chat_message_counter
+        set current_index = current_index + 1
+        where chat_id = new.chat_id
+        returning current_index into next_index;
 
-            -- if not found, set to 1.
-            exception when no_data_found then
-                new.message_index := 1;
-        end;
+        if not found then
+            begin
+                next_index := 1;
+                insert into chat_message_counter(chat_id, current_index)
+                values (new.chat_id, next_index);
+            exception when unique_violation then
+                update chat_message_counter
+                set current_index = current_index + 1
+                where chat_id = new.chat_id
+                returning current_index into next_index;
+            end;
+        end if;
+
+        new.message_index := next_index;
     end if;
     return new;
 end;
 $$ language plpgsql;
+
 create trigger trg_chat_message_index
     before insert on chat_message
     for each row execute function chat_message_index_trigger();
