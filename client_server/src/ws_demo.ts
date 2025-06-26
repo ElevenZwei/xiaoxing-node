@@ -265,6 +265,7 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
         socket,
         hasMediaData: true,
         saveName: filename,
+        mediaName: input.name || `Image ${bosid.toString()}`,
         description: input.prompt || 'Generated Image',
         mediaData: data, // 直接上传数据
       });
@@ -295,23 +296,24 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
       // 因为 Api 返回的顺序和发起请求的顺序不一定一致。
       // TODO: 这种实际上应该使用一个消息队列来处理。
       clientPushImageMessage(socket, bosid);
-      await uploadMediaMessage({
-        msgId: generateSID(),
-        chatId: context.chat?.chatId ?? BigInt(0),
-        mediaType: BOType.ImageJpeg,
-        mediaObjectId: bosid,
-        socket,
-        hasMediaData: false,
-        mediaName: `Image ${bosid.toString()}`,
-      });
     }
     const info = await Api.fetchBinaryObjectInfo(bosid);
     if (info.success === false) {
       console.error(`无法获取图片信息，bosid: ${bosid.toString()}, error: ${info.error}`);
       return { success: false, error: `获取图片信息出错了。` };
     }
+    await uploadMediaMessage({
+      msgId: generateSID(),
+      chatId: context.chat?.chatId ?? BigInt(0),
+      mediaType: BOType.ImageJpeg,
+      mediaObjectId: bosid,
+      socket,
+      hasMediaData: false,
+      mediaName: info.name || `Image ${bosid.toString()}`,
+    });
     const response: OpenImageTool.Output = {
       success: true,
+      imageId: bosid,
       imageDescription: info.description ?? '暂无图片描述',
     };
     return response;
@@ -1057,7 +1059,12 @@ function uploadUserMessage(input: UploadUserMessageInput) {
       return;
     }
     const oggBuf = await input.audio.toOggBuffer();
-    const resp = await Api.uploadChatAudio(input.msgId, `${input.msgId}.ogg`, input.sentence, oggBuf);
+    const resp = await Api.uploadChatAudio({
+      objectId: input.msgId,
+      saveName: `${input.msgId}.ogg`,
+      description: input.sentence,
+      content: oggBuf
+    });
     if (!resp.success) {
       console.error('Failed to upload user audio:', resp.error);
       return;
@@ -1104,8 +1111,12 @@ function uploadAIMessage(input: UploadAIMessageInput) {
         console.warn('AI audio data is null, skipping upload.');
         return;
       }
-      const resp = await Api.uploadChatAudio(
-        input.msgId, `${input.msgId}.ogg`, sentence, input.audio)
+      const resp = await Api.uploadChatAudio({
+        objectId: input.msgId,
+        saveName: `${input.msgId}.ogg`,
+        description: sentence,
+        content: input.audio,
+      });
       if (!resp.success) {
         console.error('Failed to upload AI audio:', resp.error);
         return;
@@ -1164,9 +1175,9 @@ type UploadMediaMessageInput = {
   mediaType: BOType;
   mediaObjectId: bigint;
   socket: WebSocket;
+  mediaName?: string;
 } & ({
   hasMediaData: false;
-  mediaName?: string;
 } | {
   // 媒体数据，如果有的话直接上传，没有的话表示引用现有的 media 对象。
   hasMediaData: true;
@@ -1179,9 +1190,14 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
   return (async () => {
     // 如果有媒体数据，直接上传
     if (input.hasMediaData === true) {
-      const res = await Api.uploadBinaryObject(
-        input.mediaObjectId, input.mediaType,
-        input.saveName, input.description, input.mediaData);
+      const res = await Api.uploadBinaryObject({
+          objectId: input.mediaObjectId,
+          saveName: input.saveName,
+          description: input.description,
+          content: input.mediaData,
+          fileType: input.mediaType,
+          name: input.mediaName,
+      });
       if (!res.success) {
         console.error('Failed to upload media object:', res.error);
         throw new Error(`Failed to upload media object: ${res.error}`);
@@ -1197,7 +1213,7 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
       senderId: BigInt(1), // TODO: 这里替换成 AI Avatar 的 ID。
       mediaType: input.mediaType,
       mediaObjectId: input.mediaObjectId,
-      mediaName: input.hasMediaData ? input.saveName : input.mediaName,
+      mediaName: input.mediaName,
     });
     if (!res.success) {
       console.error('Failed to upload media message:', res.error);

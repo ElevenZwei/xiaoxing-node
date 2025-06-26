@@ -18,6 +18,7 @@ export async function upsertBinaryObject(
     fileType: number,
     fileSize: bigint,
     storage_path: string,
+    name: string | null,
     description: string | null,
 ) {
   return prisma.binary_object.upsert({
@@ -26,6 +27,7 @@ export async function upsertBinaryObject(
       file_type: fileType,
       file_size: fileSize,
       storage_path,
+      name,
       description,
     },
     create: {
@@ -33,6 +35,7 @@ export async function upsertBinaryObject(
       file_type: fileType,
       file_size: fileSize,
       storage_path,
+      name,
       description,
     },
   });
@@ -42,14 +45,14 @@ export async function upsertBinaryObject(
   * @field {bigint} objectId - The ID of the object to which this binary data belongs.
   * @field {number} fileType - The type of the file (e.g., image, video).
   * @field {bigint} fileSize - The size of the file in bytes.
-  * @field {string} fileSaveName - The name under which the file will be saved.
-  * @field {Buffer} fileBuffer - The binary data of the file.
+  * @field {Buffer} content - The binary data of the file.
   */
 export type UploadArgs = {
   objectId: bigint;
   fileType: number;
   fileSize: bigint;
   saveName: string;
+  name: string | null;
   description: string | null;
   content: Buffer
 };
@@ -74,7 +77,8 @@ export async function uploadBinaryObject(input: UploadArgs) {
   await fs.promises.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, sanitize(input.saveName));
   await fs.promises.writeFile(filePath, input.content);
-  return upsertBinaryObject(input.objectId, input.fileType, input.fileSize, filePath, input.description);
+  return upsertBinaryObject(input.objectId, input.fileType, input.fileSize,
+                            filePath, input.name, input.description);
 }
 
 /**
@@ -108,6 +112,7 @@ export type BinaryOutput = {
   fileType: number;
   fileSize: number;
   saveName: string;
+  name: string | null;
   description: string | null;
   content: Buffer;
 };
@@ -128,6 +133,7 @@ export async function readBinaryObject(objectId: bigint): Promise<BinaryOutput> 
     fileType: line.file_type,
     fileSize: content.length,
     saveName: path.basename(filePath),
+    name: line.name,
     description: line.description,
     content,
   }

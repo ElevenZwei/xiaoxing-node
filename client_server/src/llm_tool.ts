@@ -237,7 +237,7 @@ const OpenImageToolInputSchema = z.object({
 });
 export namespace OpenImageTool {
   export type Input = z.infer<typeof OpenImageToolInputSchema>;
-  export type Output = { success: true, imageDescription: string; } | { success: false, error: string; };
+  export type Output = { success: true, imageId: bigint, imageDescription: string; } | { success: false, error: string; };
   export type MainHook = (input: Input) => Promise<Output>;
 };
 
