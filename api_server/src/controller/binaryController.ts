@@ -55,7 +55,14 @@ export async function uploadChatAudio(req: Request, res: Response): Promise<void
       },
     })
   * Output format:
-    { success: boolean; error?: string; object_id: bigint; file_type: number; file_size: bigint; }
+    { success: boolean;
+      error?: string;
+      object_id: bigint;
+      file_type: number;
+      file_size: bigint;
+      name: string?;
+      description: string?;
+    }
   */
 export async function fetchBinaryObjectInfo(req: Request, res: Response): Promise<void> {
   if (typeof req.query.object_id !== 'string') {
@@ -78,6 +85,7 @@ export async function fetchBinaryObjectInfo(req: Request, res: Response): Promis
       object_id: bo.object_id.toString(),
       file_type: bo.file_type,
       file_size: bo.file_size.toString(),
+      name: bo.name || null,
       description: bo.description || null,
     };
     res.status(200).json(answer);
@@ -157,6 +165,7 @@ function parseUploadArgs(req: Request): UploadArgs | null {
   const objectId = BigInt(req.body.object_id);
   const fileType = Number(req.body.file_type);
   const fileSize = BigInt(req.body.file_size);
+  const name = req.body.name || null; // Optional name
   const description = req.body.description || null; // Optional description
   const saveName = req.file.originalname;
   const content = req.file.buffer;
@@ -168,8 +177,10 @@ function parseUploadArgs(req: Request): UploadArgs | null {
     fileType,
     fileSize,
     saveName,
+    name,
     description,
-    content };
+    content
+  };
 }
 
 

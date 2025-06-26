@@ -70,23 +70,42 @@ export async function userOpenExChat(userId: bigint, chatId: bigint):
   });
 }
 
+export type UploadChatAudioInput = {
+  objectId: bigint;
+  saveName: string;
+  description?: string; // Optional description of the audio file
+  content: Buffer; // Audio content as a Buffer
+};
+export type UploadBinaryObjectInput = UploadChatAudioInput & {
+  fileType: number; // File type (e.g., image, audio, video)
+  name?: string; // A descriptive name of this binary file.jjj
+};
+type UploadBinaryObjectImplInput = UploadBinaryObjectInput & {
+  urlPart: 'object' | 'audio'; // Part of the URL to use for the upload
+};
 export type BinaryObjectUploadResponse = {
   success: boolean;
   error?: string; // Optional error message
   object_id: bigint;
 };
-export async function uploadBinaryObject(
-    objectId: bigint, fileType: number, saveName: string, description: string | undefined, content: Buffer) {
-  return uploadBinaryObjectImpl('object', objectId, fileType, saveName, description, content);
+export async function uploadBinaryObject(input: UploadBinaryObjectInput):
+  Promise<BinaryObjectUploadResponse> {
+  return uploadBinaryObjectImpl({
+    urlPart: 'object',
+    ...input,
+  });
 };
-export async function uploadChatAudio(objectId: bigint, saveName: string, description: string | undefined, content: Buffer) {
-  return uploadBinaryObjectImpl('audio', objectId, BOType.AudioOpus, saveName, description, content);
+export async function uploadChatAudio(input: UploadChatAudioInput):
+  Promise<BinaryObjectUploadResponse> {
+  return uploadBinaryObjectImpl({
+    urlPart: 'audio',
+    fileType: BOType.AudioOpus,
+    ...input,
+  });
 }
-async function uploadBinaryObjectImpl(
-    urlPart: 'object' | 'audio',
-    objectId: bigint, fileType: number,
-    saveName: string, description: string | undefined, content: Buffer)
-: Promise<BinaryObjectUploadResponse> {
+async function uploadBinaryObjectImpl(input: UploadBinaryObjectImplInput):
+  Promise<BinaryObjectUploadResponse> {
+  const { objectId, saveName, name, description, content, fileType, urlPart } = input;
   console.log(`Uploading binary object with ID ${objectId}, type ${fileType}`
               + `, size ${content.length}, name "${saveName}"`);
   // This function should upload a BinaryObject to the server
@@ -101,6 +120,9 @@ async function uploadBinaryObjectImpl(
   form.set('file_size', content.length.toString());
   if (description != null && description.length > 0) {
     form.append('description', description);
+  }
+  if (name != null && name.length > 0) {
+    form.append('name', name);
   }
   form.set('content', new Blob([content], { type: 'application/octet-stream' }), saveName);
   const encoder = new FormDataEncoder(form);
@@ -146,6 +168,7 @@ export type BinaryObjectInfoResponse = {
   object_id: bigint;    // BinaryObject ID
   file_type: number;    // File type (e.g., image, audio, video)
   file_size: number;    // Size of the file in bytes
+  name?: string; // Optional name of the object
   description?: string; // Optional description of the object
 }
 export async function fetchBinaryObjectInfo(objectId: bigint): Promise<BinaryObjectInfoResponse> {
