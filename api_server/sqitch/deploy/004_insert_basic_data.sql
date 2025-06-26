@@ -10,7 +10,15 @@ INSERT INTO type_value_info(type_value, type_name, type_meaning, mime_type) VALU
 (0x11,    'AudioOpusFrame',       'Opus 音频帧二进制数据，不能直接储存', null),
 (0x12,    'AudioWav',             'Wav 音频文件类型', 'audio/wav'),
 
-(0x20,    'ImageJpeg',            'Jpeg 图片文件类型', 'image/jpeg');
+(0x20,    'ImageJpeg',            'Jpeg 图片文件类型', 'image/jpeg'),
+(0x21,    'ImagePng',             'Png 图片文件类型', 'image/png'),
+(0x22,    'ImageWebp',            'Webp 图片文件类型', 'image/webp'),
+(0x23,    'ImageAvif',            'Avif 图片文件类型', 'image/avif'),
+
+(0x30,    'ModelGlb',             'Glb 模型文件类型', 'model/gltf-binary'),
+(0x31,    'ModelGltf',            'Gltf 模型文件类型', 'model/gltf+json'),
+(0x32,    'ModelObj',             'Obj 模型文件类型', 'model/obj')
+ON CONFLICT DO NOTHING;
 
 
 
@@ -42,7 +50,8 @@ INSERT INTO type_value_info (type_value, type_name, type_meaning) VALUES
 (0x5002,  'Doubao LLM',           '豆包语言大模型云平台'),
 
 (0x5101,  'No TTS',               '不使用语音合成'),
-(0x5102,  'Doubao TTS',           '使用豆包火山引擎语音合成');
+(0x5102,  'Doubao TTS',           '使用豆包火山引擎语音合成')
+ON CONFLICT DO NOTHING;
 
 /*
 对应的十进制版本如下：
