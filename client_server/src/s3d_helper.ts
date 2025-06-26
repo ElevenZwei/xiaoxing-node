@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path'
 import yaml from 'yaml';
 
-const keyPath = path.resolve(__dirname, '../../config/key.yaml');
+const keyPath = path.resolve(__dirname, '../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');
 const keyYaml = yaml.parse(keyFile);
 
