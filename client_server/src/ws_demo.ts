@@ -227,13 +227,22 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
     }
   }, 30000); // 30 seconds ping interval
 
-  ttiWrap.setHook(async (input, output) => {
+  ttiWrap.setHook(async (input, imageOutput) => {
     const bosid = generateSID();
     const filename = bosid.toString() + '_' + sanitize(input.name || 'image') + '.jpg';
-    const data = output.image;
+    if (imageOutput.success === false) {
+      return {
+        success: false,
+        error: imageOutput.error.message || '生成图片失败'
+      };
+    }
+    const data = imageOutput.image;
     if (data == null || data.length === 0) {
       console.error("Image empty or null");
-      output.text = '图片数据为空或无效，请重新尝试。';
+      const output: TTIToolWrapper.Output = {
+        success: false,
+        error: '图片数据为空或无效，请重新尝试。',
+      };
       return output;
     }
     try {
@@ -241,30 +250,39 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
       await fs.promises.mkdir(path.dirname(filepath), { recursive: true });
       await fs.promises.writeFile(filepath, data);
       if (context.chat === null || context.chat.chatId === BigInt(0)) {
-        output.text = '请先打开一个聊天会话，再创建图片。';
+        const output: TTIToolWrapper.Output = {
+          success: false,
+          error: '请先打开一个聊天会话，再创建图片。',
+        };
         return output;
       }
       // 上传图片到服务器，图片和这条媒体消息的 bosid 是一样的。
       await uploadMediaMessage({
         msgId: bosid,
-        chatId: context.chat?.chatId ?? BigInt(0),
+        chatId: context.chat.chatId,
         mediaType: BOType.ImageJpeg,
         mediaObjectId: bosid,
+        socket,
+        hasMediaData: true,
         saveName: filename,
         description: input.prompt || 'Generated Image',
         mediaData: data, // 直接上传数据
-        socket,
       });
-      output.text = JSON.stringify({
+      const output: TTIToolWrapper.Output = {
+        success: true,
         text: `图片已经创建并显示在聊天界面中，如果有工具需要引用这张图片作为输入，你可以用这个数字 ${bosid.toString()} 来引用它。`,
-        imageId: bosid.toString(),
-      });
+        imageId: bosid,
+      };
       clientPushImageMessage(socket, bosid);
+      return output;
     } catch (err) {
       console.error('Failed to save image:', err);
-      output.text = '图片保存失败，请稍后再试。';
+      const output: TTIToolWrapper.Output = {
+        success: false,
+        error: '图片保存失败，请稍后再试。',
+      };
+      return output;
     }
-    return output;
   });
 
   openImageTool.setHook(async (input): Promise<OpenImageTool.Output> => {
@@ -272,9 +290,21 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
     if (bosid === BigInt(0)) {
       return { success: false, error: '无效的图片 ID。' };
     }
-    // 这个消息推送是一个临时性保证 AI 调用工具顺序和客户端看到的图片顺序一致的方案。
-    // 因为 Api 返回的顺序和发起请求的顺序不一定一致。
-    clientPushImageMessage(socket, bosid);
+    if (input.showInChat) {
+      // 这个消息推送是一个临时性保证 AI 调用工具顺序和客户端看到的图片顺序一致的方案。
+      // 因为 Api 返回的顺序和发起请求的顺序不一定一致。
+      // TODO: 这种实际上应该使用一个消息队列来处理。
+      clientPushImageMessage(socket, bosid);
+      await uploadMediaMessage({
+        msgId: generateSID(),
+        chatId: context.chat?.chatId ?? BigInt(0),
+        mediaType: BOType.ImageJpeg,
+        mediaObjectId: bosid,
+        socket,
+        hasMediaData: false,
+        mediaName: `Image ${bosid.toString()}`,
+      });
+    }
     const info = await Api.fetchBinaryObjectInfo(bosid);
     if (info.success === false) {
       console.error(`无法获取图片信息，bosid: ${bosid.toString()}, error: ${info.error}`);
@@ -1133,15 +1163,22 @@ type UploadMediaMessageInput = {
   chatId: bigint;
   mediaType: BOType;
   mediaObjectId: bigint;
-  saveName: string;
-  description?: string; // 可选的描述信息
-  mediaData?: Buffer; // 可选的媒体数据，如果有的话直接上传，空的话表示引用现有的 media 对象。
   socket: WebSocket;
-}
+} & ({
+  hasMediaData: false;
+  mediaName?: string;
+} | {
+  // 媒体数据，如果有的话直接上传，没有的话表示引用现有的 media 对象。
+  hasMediaData: true;
+  saveName: string;
+  description: string;
+  mediaData: Buffer;
+});
+
 function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
   return (async () => {
     // 如果有媒体数据，直接上传
-    if (input.mediaData) {
+    if (input.hasMediaData === true) {
       const res = await Api.uploadBinaryObject(
         input.mediaObjectId, input.mediaType,
         input.saveName, input.description, input.mediaData);
@@ -1160,7 +1197,7 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
       senderId: BigInt(1), // TODO: 这里替换成 AI Avatar 的 ID。
       mediaType: input.mediaType,
       mediaObjectId: input.mediaObjectId,
-      mediaName: input.saveName,
+      mediaName: input.hasMediaData ? input.saveName : input.mediaName,
     });
     if (!res.success) {
       console.error('Failed to upload media message:', res.error);
