@@ -61,6 +61,7 @@
         const center = box.getCenter(new THREE.Vector3());
         model.position.sub(center); // 将模型中心移到原点
       }
+
       function getCameraDistance(camera, model, scale = 1.2) {
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
@@ -82,8 +83,6 @@
       }
 
       const context = {}
-      const func = {}
-      window.func = func; // 暴露 func 对象以便在其他地方使用
       function initCanvas(width, height) {
         const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
         context.renderer = renderer;
@@ -112,36 +111,28 @@
             });
           });
       }
+
+      const func = {}
+      window.func = func; // 暴露 func 对象以便在其他地方使用
       function loadModel(url) {
+        if (!context.scene) {
+          console.error('Scene not initialized. Call initCanvas first.');
+          return Promise.reject(new Error('Scene not initialized'));
+        }
+        if (context.model) {
+          console.warn('Disposing previous model to load new one.');
+          disposeObject(context.scene, context.model);
+          context.model = null;
+        }
+        console.log('Loading model from:', url);
+        const loader = new GLTFLoader();
         return new Promise((resolve, reject) => {
-          console.log('Loading model from:', url);
-          const loader = new GLTFLoader();
           loader.load(url, (gltf) => {
             try {
               const model = gltf.scene;
+              context.model = model;
               positionModelToCenter(model);
               context.scene.add(model);
-                model.traverse((child) => {
-                  if (child.isMesh) {
-                    // child.castShadow = true;
-                    // child.receiveShadow = true;
-                    // console.log('Mesh found:', child.name);
-                    // console.log('Material:', JSON.stringify(child.material, (key, value) => {
-                    //   if (value instanceof THREE.Color) {
-                    //     return value.getHexString(); // 转换颜色为十六进制字符串
-                    //   }
-                    //   if (value instanceof THREE.Texture) return `[Texture: ${value.name || value.uuid}]`;
-                    //   if (value instanceof HTMLImageElement) return '[Image]';
-                    //   if (key === 'url' && typeof value === 'string' && value.startsWith('data:')) {
-                    //     return '[Data URL]'; // 避免输出过长的 Data URL
-                    //   }
-                    //   return value; // 其他值保持不变
-                    // }, 2));
-                    // child.material.metalness = 0.0; // 设置金属度
-                    // child.material.roughness = 0.5; // 设置粗糙度
-                    // child.material.needsUpdate = true; // 确保材质更新
-                  }
-                });
 
               const distance = getCameraDistance(context.camera, model, 1.2);
               console.log('Camera distance:', distance);
@@ -163,6 +154,25 @@
           });
         });
       }
+
+      function disposeObject(scene, obj) {
+        scene.remove(obj);
+        obj.traverse((child) => {
+          if (child.isMesh) {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              const materials = Array.isArray(child.material)
+                ? child.material : [child.material];
+              materials.forEach((mat) => {
+                for (const value of Object.values(mat))
+                  if (value && value.isTexture) value.dispose();
+                mat.dispose();
+              });
+            }
+          }
+        });
+      }
+
       func.initCanvas = initCanvas;
       func.loadModel = loadModel;
     </script>

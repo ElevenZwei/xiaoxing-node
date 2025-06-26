@@ -5,6 +5,12 @@ import * as path from 'path';
 const htmlDir = path.join(__dirname, '/temp-glb-viewer');
 const outputDir = path.join(__dirname, '../../data/');
 
+type PageFunctions = {
+  initCanvas: (width: number, height: number) => Promise<void>;
+  loadModel: (modelFileName: string) => Promise<void>;
+  setOrbit: (pitch: number, yaw: number) => Promise<void>;
+};
+
 async function renderModel(model: Buffer, outputPrefix: string) {
   // save model to a temporary file
   const modelFileName = `model_${Date.now()}.glb`;
@@ -28,9 +34,10 @@ async function renderModel(model: Buffer, outputPrefix: string) {
         const timeout = setTimeout(() => {
           reject(new Error('Initialization timeout after 5000ms'));
         }, 5000);
-        if (typeof (window as any).initCanvas === 'function') {
-          await (window as any).initCanvas(1024, 1024);
-          await (window as any).loadModel(`./${modelFileName}`);
+        const func = (window as any).func as PageFunctions;
+        if (typeof func.initCanvas === 'function') {
+          await func.initCanvas(1024, 1024);
+          await func.loadModel(`./${modelFileName}`);
           clearTimeout(timeout);
           resolve();
         } else {
@@ -43,8 +50,9 @@ async function renderModel(model: Buffer, outputPrefix: string) {
 
     async function renderImage(pitch: number, yaw: number): Promise<void> {
       await page.evaluate(({ pitch, yaw }) => {
-        if (typeof (window as any).setOrbit === 'function') {
-          (window as any).setOrbit(pitch, yaw);
+        const func = (window as any).func as PageFunctions;
+        if (typeof func.setOrbit === 'function') {
+          return func.setOrbit(pitch, yaw);
         } else {
           throw (new Error('setOrbit function not found'));
         }
