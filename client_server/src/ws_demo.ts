@@ -13,11 +13,16 @@ import { Readable } from 'stream';
 
 import { BinaryObject, BinaryPacket, BOType, Snowflake } from './binary_packet';
 import { LLMRole, LLMHelper, LLMProvider,  LLMMsg, ChunkCollector, } from './llm_helper';
-import { TTIToolWrapper, OpenImageTool } from './llm_tool';
+import { TTIToolWrapper,
+  OpenImageTool,
+  Generate3DModelTool,
+  Render3DModelTool,
+} from './llm_tool';
 
 import * as Api from './api_query';
 import { TTSSentence, TTSStreamVolcano, TTSStreamQueue } from './tts_stream_helper';
 import { OggPageHeader, OggStreamReader, OggPacket } from './media';
+import { catchToString } from './string';
 
 const id_gen = new Snowflake(0x24);
 function generateSID(): bigint {
@@ -137,21 +142,27 @@ function wsTextHandler(socket: WebSocket, message: string) {
   console.log('Received message:', message);
   const msg_json = JSON.parse(message);
   const type = msg_json.type;
-  if (type === 'hello') {
-    // client hello
-    handleClientHello(socket, msg_json);
-  } else if (type === 'chat') {
-    handleClientChat(socket, msg_json);
-  } else if (type === 'listen') {
-    // client listen mode change.
-    handleClientListen(socket, msg_json);
-  } else if (type === 'binary') {
-    // client wants to query binary packets
-    handleClientBinary(socket, msg_json);
-  } else if (type === 'abort') {
+  try {
+    if (type === 'hello') {
+      // client hello
+      handleClientHello(socket, msg_json);
+    } else if (type === 'chat') {
+      handleClientChat(socket, msg_json);
+    } else if (type === 'listen') {
+      // client listen mode change.
+      handleClientListen(socket, msg_json);
+    } else if (type === 'binary') {
+      // client wants to query binary packets
+      handleClientBinary(socket, msg_json);
+    } else if (type === 'abort') {
     handleClientAbort(socket, msg_json);
-  } else {
-    console.warn('Unknown message type:', type);
+    } else {
+      console.warn('Unknown message type:', type);
+    }
+  } catch (error) {
+    // 如果在最外层捕获错误，那么表明这是一个需要关闭连接的错误。
+    console.error('Error handling WebSocket message:', error);
+    wsErrorHandler(socket, error as Error);
   }
 }
 
@@ -206,9 +217,23 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
     `你是一个活泼友好的年轻女孩，你现在在和用户聊天，你很乐于帮助他解决问题，你需要保持日常聊天的对话风格来回应。你所说的话会经过语音合成传递给用户，所以请不要输出难以朗读的部分，也不要使用表情符号。你应该使用日常对话的方式代替括号等书面表达。重复一下，你不能使用 markdown 语法记号，或者任何的非口语表达，你必须输出可以念出来的内容。`;
   const ttiWrap = new TTIToolWrapper();
   const openImageTool = new OpenImageTool();
+  const generate3dModelTool = new Generate3DModelTool();
+  const render3dModelTool = new Render3DModelTool();
+
+  render3dModelTool.spinUp().then(() => {
+    console.log('Render3DModelTool is ready');
+  }).catch((err) => {
+    console.error('Failed to spin up Render3DModelTool:', err);
+  });
+
   const helper = new LLMHelper(
       LLMProvider.OpenRouter, 'openai/gpt-4o',
-      30, systemPrompt, [ ttiWrap.tool, openImageTool.tool, ]);
+      30, systemPrompt, [
+        ttiWrap.tool,
+        openImageTool.tool,
+        generate3dModelTool.tool,
+        render3dModelTool.tool,
+      ]);
 
   const context = new DemoContext(clientId, helper);
   wsContextMap.set(socket, context);
@@ -231,24 +256,10 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
     const bosid = generateSID();
     const filename = bosid.toString() + '_' + sanitize(input.name || 'image') + '.jpg';
     if (imageOutput.success === false) {
-      return {
-        success: false,
-        error: imageOutput.error.message || '生成图片失败'
-      };
+      throw new Error(`创建图片失败，不应该调用 OutputHook : ${imageOutput.error}`);
     }
     const data = imageOutput.image;
-    if (data == null || data.length === 0) {
-      console.error("Image empty or null");
-      const output: TTIToolWrapper.Output = {
-        success: false,
-        error: '图片数据为空或无效，请重新尝试。',
-      };
-      return output;
-    }
     try {
-      const filepath = path.join(__dirname, `../data/media/${filename}`);
-      await fs.promises.mkdir(path.dirname(filepath), { recursive: true });
-      await fs.promises.writeFile(filepath, data);
       if (context.chat === null || context.chat.chatId === BigInt(0)) {
         const output: TTIToolWrapper.Output = {
           success: false,
@@ -269,12 +280,12 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
         description: input.prompt || 'Generated Image',
         mediaData: data, // 直接上传数据
       });
+      clientPushImageMessage(socket, bosid);
       const output: TTIToolWrapper.Output = {
         success: true,
         text: `图片已经创建并显示在聊天界面中，如果有工具需要引用这张图片作为输入，你可以用这个数字 ${bosid.toString()} 来引用它。`,
         imageId: bosid,
       };
-      clientPushImageMessage(socket, bosid);
       return output;
     } catch (err) {
       console.error('Failed to save image:', err);
@@ -288,9 +299,6 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
 
   openImageTool.setHook(async (input): Promise<OpenImageTool.Output> => {
     const bosid = BigInt(input.imageId);
-    if (bosid === BigInt(0)) {
-      return { success: false, error: '无效的图片 ID。' };
-    }
     if (input.showInChat) {
       // 这个消息推送是一个临时性保证 AI 调用工具顺序和客户端看到的图片顺序一致的方案。
       // 因为 Api 返回的顺序和发起请求的顺序不一定一致。
@@ -302,21 +310,128 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
       console.error(`无法获取图片信息，bosid: ${bosid.toString()}, error: ${info.error}`);
       return { success: false, error: `获取图片信息出错了。` };
     }
-    await uploadMediaMessage({
-      msgId: generateSID(),
-      chatId: context.chat?.chatId ?? BigInt(0),
-      mediaType: BOType.ImageJpeg,
-      mediaObjectId: bosid,
-      socket,
-      hasMediaData: false,
-      mediaName: info.name || `Image ${bosid.toString()}`,
-    });
+    // 有时候 AI 会传入一个不是图片的 bosid，这个时候我们需要检查一下。
+    if (info.file_type !== BOType.ImageJpeg) {
+      console.error(`获取的文件类型不正确，bosid: ${bosid.toString()}, type: ${info.file_type}`);
+      return { success: false, error: `获取的文件类型不正确，输入的应该是一个对应图片的数字 id ，而不是其他类型的文件，请检查。` };
+    }
+    if (input.showInChat) {
+      // TODO: Api 返回的顺序和发起请求的顺序不一定一致。
+      await uploadMediaMessage({
+        msgId: generateSID(),
+        chatId: context.chat?.chatId ?? BigInt(0),
+        mediaType: BOType.ImageJpeg,
+        mediaObjectId: bosid,
+        socket,
+        hasMediaData: false,
+        mediaName: info.name || `Image ${bosid.toString()}`,
+      });
+    }
     const response: OpenImageTool.Output = {
       success: true,
       imageId: bosid,
       imageDescription: info.description ?? '暂无图片描述',
     };
     return response;
+  });
+
+  generate3dModelTool.setInputHook(async (input) => {
+    const dl = await Api.fetchBinaryObjectInfoData(input.imageId);
+    if (!dl.success) {
+      console.error(`下载图片失败，bosid: ${input.imageId.toString()}, error: ${dl.error}`);
+      return { success: false, error: '下载图片失败，请稍后再试。' };
+    }
+    if (dl.file_type !== BOType.ImageJpeg) {
+      console.error(`获取的文件类型不正确，bosid: ${input.imageId.toString()}, type: ${dl.file_type}`);
+      return { success: false, error: '获取的文件类型不正确，输入的应该是一个对应图片的数字 id ，而不是其他类型的文件，请检查。' };
+    }
+    clientPushNotify(socket, `正在生成 3D 模型，请稍等...`);
+    return {
+      success: true,
+      image: dl.data,
+      imageId: input.imageId,
+      imageDescription: dl.description,
+    };
+  });
+  generate3dModelTool.setOutputHook(
+    async (args, _image, model): Promise<Generate3DModelTool.Output> => {
+      if (model.success === false) {
+        throw new Error(`生成 3D 模型失败，不应该调用 OutputHook : ${model.error}`);
+      }
+      const bosid = generateSID();
+      const filename = bosid.toString() + '_' + sanitize(args.modelName) + '.glb';
+      const modelName: string = args.modelName;
+      const modelDescription: string = args.modelDescription;
+      try {
+        const res = await Api.uploadBinaryObject({
+          objectId: bosid,
+          fileType: BOType.ModelGlb,
+          saveName: filename,
+          name: modelName,
+          description: modelDescription,
+          content: model.model,
+        });
+        if (!res.success)
+          return { success: false, error: `上传 3D 模型失败，错误信息: ${res.error}`};
+        return { success: true, modelId: bosid };
+      } catch (err) {
+        return { success: false, error: `上传 3D 模型失败，错误信息: ${catchToString(err)}` };
+      }
+  });
+
+  render3dModelTool.setInputHook(async (input) => {
+    const dl = await Api.fetchBinaryObjectInfoData(input.modelId);
+    if (!dl.success) {
+      console.error(`下载模型失败，bosid: ${input.modelId.toString()}, error: ${dl.error}`);
+      return { success: false, error: '下载模型失败，请稍后再试。' };
+    }
+    if (dl.file_type !== BOType.ModelGlb) {
+      console.error(`获取的文件类型不正确，bosid: ${input.modelId.toString()}, type: ${dl.file_type}`);
+      return { success: false, error: '获取的文件类型不正确，输入的应该是一个对应 3D 模型的数字 id ，而不是其他类型的文件，请检查。' };
+    }
+    return {
+      success: true,
+      model: dl.data,
+      modelId: input.modelId,
+      modelDescription: dl.description,
+    };
+  });
+
+  render3dModelTool.setOutputHook(
+    async (args, _model, image): Promise<Render3DModelTool.Output> => {
+      if (image.success === false) {
+        throw new Error(`渲染 3D 模型失败，不应该调用 OutputHook : ${image.error}`);
+      }
+      const bosid = generateSID();
+      const filename = bosid.toString() + '_' + sanitize(args.imageName) + '.jpg';
+      const imageName: string = args.imageName;
+      const imageDescription: string = args.imageDescription;
+      try {
+        const res = await Api.uploadBinaryObject({
+          objectId: bosid, fileType: BOType.ImageJpeg,
+          saveName: filename,
+          name: imageName,
+          description: imageDescription,
+          content: image.image,
+        });
+        if (!res.success)
+          return { success: false, error: `上传渲染图片失败，错误信息: ${res.error}`};
+        if (args.showInChat) {
+          clientPushImageMessage(socket, bosid);
+          await uploadMediaMessage({
+            msgId: generateSID(),
+            chatId: context.chat?.chatId ?? BigInt(0),
+            mediaType: BOType.ImageJpeg,
+            mediaObjectId: bosid,
+            socket,
+            hasMediaData: false,
+            mediaName: imageName,
+          });
+        }
+        return { success: true, imageId: bosid };
+      } catch (err) {
+        return { success: false, error: `上传渲染图片失败，错误信息: ${catchToString(err)}` };
+      }
   });
 
   return context;
@@ -405,7 +520,7 @@ async function handleClientChat(socket: WebSocket, json: any) {
         lastMessageIndex: 0, // 初始化消息索引
       };
       console.info('Created new chat session with placeholder chatId:', context.chat.chatId);
-      sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
+      sendChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
       // clientImageTest(socket);
       return;
     }
@@ -478,7 +593,7 @@ async function handleClientBinary(socket: WebSocket, json: any) {
         // 发送图片数据
         clientPushImage(socket, bosid, data.data);
       } else {
-        console.warn('Unsupported BinaryObject type:', info.file_type);
+        console.error('Unsupported BinaryObject type:', info.file_type);
       }
     }
   } catch (err: any) {
@@ -536,7 +651,7 @@ async function handleClientListen(socket: WebSocket, json: any) {
               chatName: chatInfo.chat_name,
               lastMessageIndex: chatInfo.last_message_index,
             };
-            sendChatOpen(socket, context.chat, '欢迎使用聊天功能！请开始新的对话。');
+            sendChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
           } catch (err) {
             console.error('Failed to create new chat:', err);
             sendChatOpenFailed(socket, chatId, '无法创建新的聊天会话，请稍后再试。');
@@ -684,6 +799,11 @@ type UserMessageToLLMParams = {
 function userMessageToLLM(input: UserMessageToLLMParams) {
   const { chatId, socket, context, sentence } = input;
   context.llmMutex.runExclusive(async () => {
+    // 确保在生成新消息的时候，停止之前的语音推送。
+    // 因为可能会卡网络，然后累积两个消息需要处理。
+    // 导致还是有两个消息同时推送音频的情况发生。
+    // 所以这里在生成新的音频推送之前，先停止之前的 TTS 音频推送。
+    context.stopTTSAudioPush(); // 停止 TTS 音频推送
     const tts = new LLMTTS(socket);
     context.ttsSessions.push(tts);
 
@@ -773,8 +893,9 @@ function userMessageToLLM(input: UserMessageToLLMParams) {
         return;
       }
     } catch (err) {
-      clientPushNotify(socket, 'AI 不愿意回答你的想法。');
-      throw err;
+      clientPushNotify(socket, 'AI 不愿意回答你说的话。');
+      console.error('LLM error:', catchToString(err));
+      // console.error('LLM error:', err);
     }
   });
 }
@@ -956,6 +1077,7 @@ function clientPushAudio(socket: WebSocket, oggPacket: OggPacket) {
 function clientPushImageMessage(socket: WebSocket, bosid: bigint) {
     const info = { type: 'image', bosid: bosid.toString() };
     // Send the image info to the client
+    console.log('Sending image message with bosid:', bosid.toString());
     socket.send(JSON.stringify(info));
 }
 
@@ -1194,7 +1316,7 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
           objectId: input.mediaObjectId,
           saveName: input.saveName,
           description: input.description,
-          content: input.mediaData,
+           content: input.mediaData,
           fileType: input.mediaType,
           name: input.mediaName,
       });
@@ -1221,14 +1343,18 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
     }
     console.log('Media message uploaded successfully:', res);
     clientPushMessageIndex(input.socket, res);
-  })();
+  })().catch(err => {
+    console.error('Failed to upload media message:', err);
+    // 这里可以发送一个错误通知给客户端。
+    // clientPushNotify(input.socket, '上传媒体消息失败，请稍后再试。');
+  });
 }
 
 async function resizeImageFit(imageBuffer: Buffer): Promise<Buffer> {
   const meta = await sharp(imageBuffer).metadata();
   const { width, height } = meta;
-  const maxWidth = 280; // 最大宽度
-  const maxHeight = 340; // 最大高度
+  const maxWidth = 300; // 最大宽度
+  const maxHeight = 240; // 最大高度
   const resizeRatio = Math.min(maxWidth / width, maxHeight / height, 1);
   console.log(`Resizing image from ${width}x${height} to fit within ${maxWidth}x${maxHeight}`);
   return sharp(imageBuffer)
