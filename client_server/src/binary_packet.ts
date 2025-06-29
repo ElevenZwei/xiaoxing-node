@@ -18,6 +18,7 @@ export enum BOType {
     AudioOpusFrame = 0x11,  // 音频数据帧（Opus 编码）
     AudioWav = 0x12,    // 音频数据（Wav 编码）
     ImageJpeg = 0x20,   // 图像数据（JPEG 编码）
+    ModelGlb = 0x30,    // 3D 模型数据（GLB 格式）
 }
 
 // 正向映射：Enum Value → String 名称
@@ -28,6 +29,7 @@ export function BOTypeToString(value: BOType): string {
     case BOType.AudioOpusFrame: return "AudioOpusFrame";
     case BOType.AudioWav: return "AudioWav";
     case BOType.ImageJpeg: return "ImageJpeg";
+    case BOType.ModelGlb: return "ModelGlb";
     default: return `Unknown(${value})`;
   }
 }
@@ -40,6 +42,7 @@ export function BOTypeFromString(name: string): BOType | undefined {
     case "AudioOpusFrame": return BOType.AudioOpusFrame;
     case "AudioWav": return BOType.AudioWav;
     case "ImageJpeg": return BOType.ImageJpeg;
+    case "ModelGlb": return BOType.ModelGlb;
     default: return undefined;
   }
 }

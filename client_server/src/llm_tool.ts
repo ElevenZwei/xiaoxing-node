@@ -1,10 +1,11 @@
 import {
   LLMTool, LLMToolPrompt,
-  LLMToolFunction, LLMToolFunctionArgs, } from './llm_helper';
+  LLMToolFunctionArgs, } from './llm_helper';
 import { TTIVolcanoHelper, TTIImageSize } from './tti_helper';
 import { S3DHelper, S3DModel } from './s3d_helper';
-import { jsonStringify } from './string';
+import { catchToString, jsonStringify, zSid } from './string';
 import { z } from 'zod';
+import { GlbRenderer } from './glb_renderer';
 
 const GenerateImageFromTextInputSchema = z.object({
   prompt: z.string().describe('用于描述所需图像的自然语言文本。'),
@@ -43,7 +44,7 @@ async function generateImageFromText(input: GenerateImageFromTextInput):
       image,
     };
   } catch (err) {
-    console.error("Error generating image:", err);
+    console.error("Error generating image:", catchToString(err));
     const error: Error = err instanceof Error ? err : new Error('未知错误');
     return {
       success: false,
@@ -56,12 +57,8 @@ const ttiDescription = (
   '使用自然语言提示词生成图像。该工具接受一段详细的文字描述，并根据其生成一张相应的图像。可用于创建插画、概念艺术、产品图、头像、风景等。\n'
 
 + '这个工具的返回里包含一个数字表示这个图像的唯一 ID，'
-+ '这个工具会自动将生成的图像显示在聊天界面中，不要接着调用显示图像的工具。\n'
-
-+ '注意：因为 TTI 的图像生成模型需要几秒钟生成图像，'
-+ '所以在调用这个工具的消息里面可以夹带一些图片的文本描述，'
-+ '这可以减少用户等待绘制中的枯燥感。'
-+ '而在工具使用完毕之后的文本总结里要少说话，避免让文本影响了用户对新图片的注意力。\n'
++ '这个工具会自动将生成的图像显示在聊天界面中，不要接着调用显示图像的工具。'
++ '在工具使用完毕之后的文本总结里要少说话，避免让文本影响了用户对新图片的注意力。\n'
 
 + '另外，当用户说想要某种物品的设计图的时候，调用这个工具应当在图片描述输入中加上白色背景，自然光照，产品渲染等提示词。');
 
@@ -104,14 +101,15 @@ const ttiPrompt: LLMToolPrompt = {
 
 export class TTIToolWrapper {
   private hook: TTIToolWrapper.OutputHook =
-      async (_input: GenerateImageFromTextInput, output: GenerateImageFromTextOutput) =>
-      ({ success: false, error: '开发者没有给出处理图像储存的逻辑。' });
+      async (_) => ({ success: false, error: '开发者没有给出处理图像储存的逻辑。' });
 
   get tool(): LLMTool {
     return {
       name: 'generateImageFromText',
       prompt: ttiPrompt,
-      code: this.handleToolCall.bind(this),
+      code: async (args: LLMToolFunctionArgs): Promise<string> => {
+        return jsonStringify(await this.handleToolCall(args));
+      }
     }
   }
 
@@ -134,14 +132,22 @@ export class TTIToolWrapper {
     };
   }
 
-  private async generate(input: GenerateImageFromTextInput): Promise<string> {
+  private async generate(input: GenerateImageFromTextInput): Promise<TTIToolWrapper.Output> {
     // 这里的两个函数都不会抛出异常，错误会通过 error 字段返回
     const output: GenerateImageFromTextOutput = await generateImageFromText(input);
+    if (output.success === false) {
+      console.error("Error generating image:", output.error);
+      return ({ success: false, error: output.error.message });
+    }
+    if (output.image.length === 0) {
+      console.error("Generated image is empty.");
+      return { success: false, error: '生成的图像数据为空。' };
+    }
     const res: TTIToolWrapper.Output = await this.hook(input, output);
-    return jsonStringify(res);
+    return res;
   }
 
-  private async handleToolCall(args: LLMToolFunctionArgs): Promise<string> {
+  private async handleToolCall(args: LLMToolFunctionArgs): Promise<TTIToolWrapper.Output> {
     // check args against schema
     const parsedArgs = GenerateImageFromTextInputSchema.safeParse(args);
     if (parsedArgs.success) {
@@ -149,7 +155,7 @@ export class TTIToolWrapper {
       return this.generate(input);
     } else {
       console.error("Invalid arguments for generateImageFromText:", parsedArgs.error);
-      return '请提供有效的输入，形如：{"prompt": "描述图像内容", "name": "图像名称", "shape": "landscape"}';
+      return { success: false, error: '请提供有效的输入，形如：{"prompt": "描述图像内容", "name": "图像名称", "shape": "landscape"}' };
     }
   }
 }
@@ -175,7 +181,7 @@ const openImagePrompt: LLMToolPrompt = {
       type: 'object',
       properties: {
         imageId: {
-          type: 'number',
+          type: 'string',
           description: '从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID 。',
         },
         showInChat: {
@@ -226,13 +232,13 @@ export class OpenImageTool {
       return this.hook(input);
     } else {
       console.error("Invalid arguments for openImage:", parsedArgs.error);
-      return { success: false, error: '请提供有效的输入，形如：{"imageId": 123}' };
+      return { success: false, error: '请提供有效的输入，形如：{"imageId": "123"}' };
     }
   }
 };
 
 const OpenImageToolInputSchema = z.object({
-  imageId: z.number().describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
+  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
   showInChat: z.boolean().default(true).describe('是否在聊天界面中显示图片。默认为 true，表示显示图片。'),
 });
 export namespace OpenImageTool {
@@ -245,7 +251,7 @@ export namespace OpenImageTool {
 const generate3DModelDescription = (
   '使用图像生成 3D 模型。这个工具接受一张图片，并根据其生成一个 3D 模型。'
   + '生成的模型是 GLB 格式。可以用于产品外观原型、虚拟现实、游戏开发等场景。'
-  + '如果成功生成，工具会返回一个表示这个 3D 模型的数字标识符，还有输入的图片 ID 对应的图片描述如果存在的话。'
+  + '如果成功生成，工具会返回一个表示这个 3D 模型的数字标识符。'
   + '如果生成失败，工具会在返回中包含错误信息。'
   + '注意：生成 3D 模型需要大约 10 秒，请耐心等待，AI 可以在调用时输出一些文字提示。'
 );
@@ -258,28 +264,28 @@ const generate3DModelPrompt: LLMToolPrompt = {
       type: 'object',
       properties: {
         imageId: {
-          type: 'number',
+          type: 'string',
           description: '从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID 。',
         },
-        name: {
+        modelName: {
           type: 'string',
           description: '3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。',
         },
-        description: {
+        modelDescription: {
           type: 'string',
           description: '3D 模型的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。'
         },
       },
-      required: ['imageId', 'name', 'description'],
+      required: ['imageId', 'modelName', 'modelDescription'],
     },
   },
 };
 
 export class Generate3DModelTool {
-  private inputHook: Generate3DModelTool.InputHook = async (_input) => {
+  private inputHook: Generate3DModelTool.InputHook = async (_) => {
     return { success: false, error: '开发者没有给出读取图片的逻辑。' };
   };
-  private outputHook: Generate3DModelTool.OutputHook = async (_input, _output) => {
+  private outputHook: Generate3DModelTool.OutputHook = async (_) => {
     return { success: false, error: '开发者没有给出储存输出文件的逻辑。' };
   }
 
@@ -308,10 +314,10 @@ export class Generate3DModelTool {
   }
 
   setOutputHook(hook: Generate3DModelTool.OutputHook | undefined): void {
-    this.outputHook = async (input, output) => {
+    this.outputHook = async (args, image, output) => {
       if (hook === undefined) { return { success: false, error: '没有设置储存输出文件的逻辑。' }; }
       try {
-        return await hook(input, output);
+        return await hook(args, image, output);
       } catch (err) {
         // 如果 hook 执行出错，返回一个包含错误信息的输出
         console.error("Error in Generate3DModelTool output hook:", err);
@@ -321,28 +327,19 @@ export class Generate3DModelTool {
     };
   }
 
-  private async handleInput(input: LLMToolFunctionArgs): Promise<Generate3DModelTool.ImageInput> {
-    const parsedInput = Generate3DModelInputSchema.safeParse(input);
-    if (parsedInput.success) {
-      const imageIdInput: Generate3DModelTool.Input = parsedInput.data;
-      return this.inputHook(imageIdInput);
-    } else {
-      console.error("Invalid arguments for generate3DModel:", parsedInput.error);
-      return { success: false, error: '请提供有效的输入，形如：{"imageId": 123, "name": "模型名称", "description": "模型描述"}' };
-    }
-  }
-
-  private async handleOutput(input: Generate3DModelTool.ImageInput, output: Generate3DModelTool.ModelOutput): Promise<Generate3DModelTool.Output> {
-    return this.outputHook(input, output);
-  }
-
   private async handleToolCall(args: LLMToolFunctionArgs): Promise<Generate3DModelTool.Output> {
     // check args against schema
-    const imageInput = await this.handleInput(args);
+    const parsedInput = Generate3DModelInputSchema.safeParse(args);
+    if (!parsedInput.success) {
+      console.error("Invalid arguments for generate3DModel:", parsedInput.error);
+      return { success: false, error: '请提供有效的输入，形如：{"imageId": "123", "modelName": "模型名称", "modelDescription": "模型描述"}' };
+    }
+    const imageIdInput: Generate3DModelTool.Input = parsedInput.data;
+    // 获取图片数据
+    const imageInput = await this.inputHook(imageIdInput);
     if (!imageInput.success) {
       return { success: false, error: imageInput.error };
     }
-    // 获取图片数据
     const imageData = imageInput.image;
     if (!(imageData instanceof Buffer) || imageData.length === 0) {
       return { success: false, error: '没有提供有效的图片数据。' };
@@ -352,8 +349,8 @@ export class Generate3DModelTool {
     try {
       const modelBuffer = await s3dHelper.generate3DModel(imageData);
       const modelOutput: Generate3DModelTool.ModelOutput =
-          { success: true, model: modelBuffer, imageDescription: imageInput.description };
-      return this.handleOutput(imageInput, modelOutput);
+          { success: true, model: modelBuffer };
+      return this.outputHook(imageIdInput, imageInput, modelOutput);
     } catch (error) {
       console.error("Error generating 3D model:", error);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -363,20 +360,20 @@ export class Generate3DModelTool {
 }
 
 const Generate3DModelInputSchema = z.object({
-  imageId: z.number().describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
-  name: z.string().describe('3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。'),
-  description: z.string().describe('3D 模型的描述信息，可以是对图像内容更细致的形容。这个信息之后可以被读取到。'),
+  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
+  modelName: z.string().describe('3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。'),
+  modelDescription: z.string().describe('3D 模型的描述信息，可以是对图像内容更细致的形容。这个信息之后可以被读取到。'),
 });
 export namespace Generate3DModelTool {
   export type Input = z.infer<typeof Generate3DModelInputSchema>;
   export type ImageInput = (
-    { success: true, image: Buffer, description?: string } | { success: false, error: string });
+    { success: true, image: Buffer, imageId: bigint, imageDescription?: string } | { success: false, error: string });
   export type InputHook = (input: Input) => Promise<ImageInput>;
   export type ModelOutput = (
-    { success: true, model: Buffer, imageDescription?: string; } | { success: false, error: string; });
+    { success: true, model: Buffer } | { success: false, error: string });
   export type Output = (
-    { success: true, modelId: bigint, imageDescription?: string; } | { success: false, error: string; });
-  export type OutputHook = (input: ImageInput, output: ModelOutput) => Promise<Output>;
+    { success: true, modelId: bigint } | { success: false, error: string; });
+  export type OutputHook = (args: Input, image: ImageInput, output: ModelOutput) => Promise<Output>;
 }
 
 
@@ -384,7 +381,7 @@ export namespace Generate3DModelTool {
 const render3DModelDescription = (
   '使用 3D 模型生成渲染图像。这个工具接受一个 3D 模型的数字标识符、视角参数、以及是否显示在聊天界面中，并根据其生成一张渲染图像。'
   + '输入的模型是 GLB 格式，生成的图像是 JPEG 格式。'
-  + '如果成功生成，工具会返回一个表示渲染图像的数字标识符，还有输入的模型描述如果存在的话。'
+  + '如果成功生成，工具会返回一个表示渲染图像的数字标识符。'
   + '如果生成失败，工具会在返回中包含错误信息。'
 );
 const render3DModelPrompt: LLMToolPrompt = {
@@ -396,7 +393,7 @@ const render3DModelPrompt: LLMToolPrompt = {
       type: 'object',
       properties: {
         modelId: {
-          type: 'bigint',
+          type: 'string',
           description: '从其他工具中得到的 3D 模型数字标识符，可以代表模型的唯一 ID 。',
         },
         pitch: {
@@ -405,7 +402,15 @@ const render3DModelPrompt: LLMToolPrompt = {
         },
         yaw: {
           type: 'number',
-          description: '渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从正前方看模型，90 度表示从右侧看，180 度表示从背后看，270 度表示从左侧看。',
+          description: '渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从背后看模型，90 度表示从右侧看，180 度表示从正前方看，270 度表示从左侧看。',
+        },
+        imageName: {
+          type: 'string',
+          description: '渲染图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉渲染" 或 "未来城市视角"。',
+        },
+        imageDescription: {
+          type: 'string',
+          description: '渲染图像的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。',
         },
         showInChat: {
           type: 'boolean',
@@ -413,14 +418,132 @@ const render3DModelPrompt: LLMToolPrompt = {
           default: true,
         },
       },
-      required: ['modelId', 'pitch', 'yaw'],
+      required: ['modelId', 'pitch', 'yaw', 'imageName', 'imageDescription'],
     },
   },
 };
 
 export class Render3DModelTool {
+  private renderer = new GlbRenderer();
+  private inputHook: Render3DModelTool.InputHook = async (_) => {
+    return { success: false, error: '开发者没有给出读取 3D 模型的逻辑。' };
+  }
+  private outputHook: Render3DModelTool.OutputHook = async (_) => {
+    return { success: false, error: '开发者没有给出储存渲染图像的逻辑。' };
+  }
+  async spinUp(width: number = 1024, height: number = 1024): Promise<void> {
+    await this.renderer.spinUp(width, height);
+  }
+  async spinDown(): Promise<void> {
+    await this.renderer.spinDown();
+  }
+
+  get tool(): LLMTool {
+    return {
+      name: 'render3DModel',
+      prompt: render3DModelPrompt,
+      code: async (args: LLMToolFunctionArgs): Promise<string> => {
+        return jsonStringify(await this.handleToolCall(args));
+      }
+    };
+  }
+
+  setInputHook(hook: Render3DModelTool.InputHook | undefined): void {
+    this.inputHook = async (input) => {
+      if (hook === undefined) { return { success: false, error: '没有设置读取 3D 模型的逻辑。' }; }
+      try {
+        return await hook(input);
+      } catch (err) {
+        // 如果 hook 执行出错，返回一个包含错误信息的输出
+        console.error("Error in Render3DModelTool input hook:", err);
+        const error: Error = err instanceof Error ? err : new Error('未知错误');
+        return { success: false, error: `处理输入时发生错误：${error.message}` };
+      }
+    };
+  }
+
+  setOutputHook(hook: Render3DModelTool.OutputHook | undefined): void {
+    this.outputHook = async (args, model, image) => {
+      if (hook === undefined) { return { success: false, error: '没有设置储存渲染图像的逻辑。' }; }
+      try {
+        return await hook(args, model, image);
+      } catch (err) {
+        // 如果 hook 执行出错，返回一个包含错误信息的输出
+        console.error("Error in Render3DModelTool output hook:", err);
+        const error: Error = err instanceof Error ? err : new Error('未知错误');
+        return { success: false, error: `处理输出时发生错误：${error.message}` };
+      }
+    };
+  }
+
+  private async handleToolCall(args: LLMToolFunctionArgs): Promise<Render3DModelTool.Output> {
+    // check args against schema
+    const parsedInput = Render3DModelInputSchema.safeParse(args);
+    if (!parsedInput.success) {
+      console.error("Invalid arguments for render3DModel:", parsedInput.error);
+      return { success: false, error: '请提供有效的输入，形如：{"modelId": "123", "pitch": 30, "yaw": 45, "imageName": "渲染图像", "imageDescription": "图像描述"}' };
+    }
+    const modelInput: Render3DModelTool.Input = parsedInput.data;
+    // 获取 3D 模型数据
+    const modelData = await this.inputHook(modelInput);
+    if (!modelData.success) {
+      return { success: false, error: modelData.error };
+    }
+    const modelBuffer = modelData.model;
+    if (!(modelBuffer instanceof Buffer) || modelBuffer.length === 0) {
+      return { success: false, error: '没有提供有效的 3D 模型数据。' };
+    }
+    try {
+      await this.spinUp();  // 确保渲染器已经启动
+      const page = await this.renderer.createPage(1024, 1024);
+      await this.renderer.loadModel(modelBuffer, page);
+      const imageBuffer: Buffer =
+        await this.renderer.renderImage(modelInput.pitch, modelInput.yaw, page);
+      await this.renderer.closePage(page);
+      const imageOutput: Render3DModelTool.ImageOutput =
+        { success: true, image: imageBuffer };
+      return this.outputHook(modelInput, modelData, imageOutput);
+    } catch (error) {
+      console.error("Error rendering 3D model:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { success: false, error: `渲染 3D 模型失败：${errorMessage}` };
+    }
+  }
 }
 
+const Render3DModelInputSchema = z.object({
+  modelId: zSid.describe('从其他工具中得到的 3D 模型数字标识符，可以代表模型的唯一 ID。'),
+  pitch: z.number().describe('渲染视角相对于模型的仰角，范围是 -90 到 90 度。90 度表示从上方俯视，-90 度表示从下方仰视。0 度表示水平视角。'),
+  yaw: z.number().describe('渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从正前方看模型，90 度表示从右侧看，180 度表示从背后看，270 度表示从左侧看。'),
+  imageName: z.string().describe('渲染图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉渲染" 或 "未来城市视角"。'),
+  imageDescription: z.string().describe('渲染图像的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。'),
+  showInChat: z.boolean().default(true).describe('是否在聊天界面中显示渲染图像。默认为 true，表示显示图像。'),
+});
+
+export namespace Render3DModelTool {
+  export type Input = z.infer<typeof Render3DModelInputSchema>;
+  export type ModelInput = (
+    { success: true, model: Buffer, name?: string, description?: string } | { success: false, error: string });
+  export type InputHook = (input: Input) => Promise<ModelInput>;
+  export type ImageOutput = (
+    { success: true, image: Buffer, } | { success: false, error: string, });
+  export type Output = (
+    { success: true, imageId: bigint } | { success: false, error: string; });
+  export type OutputHook = (args: Input, model: ModelInput, image: ImageOutput) => Promise<Output>;
+}
+
+// TODO: 感觉这些工具的代码高度重复，应该抽象出一个通用的工具类来处理输入输出和错误处理逻辑。
+// 目前的设计是每个工具都需要实现自己的输入输出处理逻辑，这样会导致代码重复和维护困难。
+// 通用类型的设计可以包括以下几个方面：
+// InputHook：一个通用的输入处理函数，可以接受不同类型的输入并返回统一格式的结果。
+// OutputHook：一个通用的输出处理函数，可以接受不同类型的输出并进行统一处理。
+// MainHook：一个通用的主处理函数，可以接受输入并调用相应的输入和输出处理函数，返回统一格式的结果。
+// 生成这样具体工具需要做的是往通用工具里面注入定制的类型和这些 Hook 函数，
+// 这样可以减少每个工具的代码量，避免重复代码，提高可维护性和可扩展性。
+// 在实现时，可以使用泛型来处理不同类型的输入输出，
+// 现在的 setHook 函数内容是非常模板化的。
+// 现在的 outputHook 实现里面也有很多重复，尤其是错误处理逻辑，代码在 ws_demo.ts 里面。
+// InputHook 和 OutputHook 里面都有 DB 读写相关的部分，可以制造一个 Tool-DB 类来处理这些逻辑。
 
 
 

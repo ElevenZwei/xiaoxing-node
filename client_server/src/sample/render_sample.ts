@@ -6,14 +6,15 @@ const renderer = new GlbRenderer();
 async function renderModel(modelPath: string, savePrefix: string) {
   const model = await fs.promises.readFile(modelPath);
   console.log(`✅ [${Date.now()}] Renderer spining up.`);
-  await renderer.spinUp(1024, 1024);
   console.log(`✅ [${Date.now()}] Renderer spun up for model: ${modelPath}`);
-  await renderer.loadModel(model,);
+  await renderer.spinUp();
+  const page = await renderer.createPage(1280, 720);
+  await renderer.loadModel(model, page);
   console.log(`✅ [${Date.now()}] Renderer loaded model: ${modelPath}`);
   const failures: string[] = [];
   for (let pitch = 0; pitch <= 30; pitch += 10) {
     for (let yaw = 0; yaw <= 360; yaw += 60) {
-      await renderer.renderImage(pitch, yaw)
+      await renderer.renderImage(pitch, yaw, page)
       .then(img => {
         const outputPath = path.join('../../data/', `${savePrefix}_${pitch}_${yaw}.jpeg`);
         return fs.promises.writeFile(outputPath, img);
@@ -25,6 +26,7 @@ async function renderModel(modelPath: string, savePrefix: string) {
       });
     }
   }
+  await renderer.closePage(page);
   if (failures.length > 0) {
     console.error('❌ Some images failed to render:', failures.join(', '));
   } else {

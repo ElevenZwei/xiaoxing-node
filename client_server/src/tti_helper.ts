@@ -4,6 +4,7 @@ import yaml from 'yaml';
 import { OpenAI, } from 'openai';
 import axios from 'axios';
 import { AxiosError } from 'axios';
+import { catchToString } from './string';
 
 const keyPath = path.resolve(__dirname, '../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');
@@ -182,41 +183,56 @@ export class TTIVolcanoHelper {
     *   }
     */
   async generateImage(prompt: string, size: TTIImageSize, seed: number = -1): Promise<string> {
-    const response = await axios.post(
-      `${this.url}/images/generations`,
-      {
-        model: this.model,
-        prompt: prompt,
-        response_format: 'url',
-        size: TTIImageSizeToString(size, TTIProvider.Volcano),
-        seed: seed >= 0 ? seed : undefined,
-        guidance_scale: 2.5,
-        watermark: false,
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.key}`,
+    try {
+      const response = await axios.post(
+        `${this.url}/images/generations`,
+        {
+          model: this.model,
+          prompt: prompt,
+          response_format: 'url',
+          size: TTIImageSizeToString(size, TTIProvider.Volcano),
+          seed: seed >= 0 ? seed : undefined,
+          guidance_scale: 2.5,
+          watermark: false,
         },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.key}`,
+          },
+        }
+      );
+      const data = response.data;
+      if (response.status !== 200) {
+        throw new Error(`Failed to generate image and no message: ${response.statusText}`);
       }
-    );
-    const data = response.data;
-    if (typeof data.error === 'object' && data.error !== null) {
-      throw new Error(`Error from Volcano API code: ${data.error.code}, msg: ${data.error.message}`);
+      if (!data.data || data.data.length === 0) {
+        throw new Error('No images generated');
+      }
+      const urls: string[] = data.data
+        .map((image: { url: string }) => image.url)
+        .filter((url: string) => url !== undefined && url !== null);
+      if (urls.length === 0) {
+        throw new Error('No image URLs returned');
+      }
+      return urls[0];  // Return the first image URL
+    } catch (error: any) {
+      if (axios.isAxiosError(error)) {
+        console.error('Error in Volcano TTI API:', error.message);
+        if (error.response) {
+          const errorData = error.response.data;
+          if (typeof errorData.error === 'object' && errorData.error !== null) {
+            throw new Error(`Error from Volcano API code: ${errorData.error.code}, msg: ${errorData.error.message}`);
+          }
+          throw new Error(`API Error: ${errorData}`);
+        } else {
+          throw new Error(`Network Error: ${error.message}`);
+        }
+      } else {
+        console.error('Unexpected error in Volcano TTI API:', error);
+        throw new Error(`Unexpected Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
-    if (response.status !== 200) {
-      throw new Error(`Failed to generate image and no message: ${response.statusText}`);
-    }
-    if (!data.data || data.data.length === 0) {
-      throw new Error('No images generated');
-    }
-    const urls: string[] = data.data
-      .map((image: { url: string }) => image.url)
-      .filter((url: string) => url !== undefined && url !== null);
-    if (urls.length === 0) {
-      throw new Error('No image URLs returned');
-    }
-    return urls[0];  // Return the first image URL
   }
 
   async generateImageFetch(prompt: string, size: TTIImageSize, seed: number = -1): Promise<Buffer> {
@@ -225,23 +241,28 @@ export class TTIVolcanoHelper {
   }
 }
 
-export async function fetchImage(url: string): Promise<Buffer> {
-  try {
-    const response = await axios.get(url, {
-      responseType: 'arraybuffer',
-    });
-    if (response.status !== 200) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
+export async function fetchImage(url: string, maxTry: number = 3): Promise<Buffer> {
+  let error: any;
+  for (let attempt = 0; attempt < maxTry; attempt++) {
+    try {
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+      });
+      if (response.status !== 200) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+      return Buffer.from(response.data);
+    } catch (err: unknown) {
+      error = err;
+      console.error(`Attempt ${attempt + 1} failed:`, catchToString(err));
     }
-    return Buffer.from(response.data);
-  } catch (error: any) {
-    if (error instanceof AxiosError) {
-      console.error('Error fetching image:', error.message);
-      throw new Error(`Failed to fetch image from URL: ${url}`);
-    } else {
-      // Re-throw other types of errors
-      throw error;
-    }
+  }
+  if (error instanceof AxiosError) {
+    console.error('Error fetching image:', error.message);
+    throw new Error(`Failed to fetch image from URL: ${url}`);
+  } else {
+    // Re-throw other types of errors
+    throw error;
   }
 }
 

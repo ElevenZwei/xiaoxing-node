@@ -83,11 +83,9 @@ export type UploadBinaryObjectInput = UploadChatAudioInput & {
 type UploadBinaryObjectImplInput = UploadBinaryObjectInput & {
   urlPart: 'object' | 'audio'; // Part of the URL to use for the upload
 };
-export type BinaryObjectUploadResponse = {
-  success: boolean;
-  error?: string; // Optional error message
-  object_id: bigint;
-};
+export type BinaryObjectUploadResponse =
+  { success: false, error: string } |
+  { success: true; object_id: bigint };
 export async function uploadBinaryObject(input: UploadBinaryObjectInput):
   Promise<BinaryObjectUploadResponse> {
   return uploadBinaryObjectImpl({
@@ -162,9 +160,8 @@ export async function downloadBinaryObject(objectId: bigint): Promise<BinaryObje
   });
 }
 
-export type BinaryObjectInfoResponse = {
-  success: boolean;
-  error?: string;       // Optional error message
+export type BinaryObjectInfoResponse = { success: false; error: string; } | {
+  success: true;
   object_id: bigint;    // BinaryObject ID
   file_type: number;    // File type (e.g., image, audio, video)
   file_size: number;    // Size of the file in bytes
@@ -185,6 +182,28 @@ export async function fetchBinaryObjectInfo(objectId: bigint): Promise<BinaryObj
     }
     throw error;
   });
+}
+
+
+export type BlobInfoDataResponse =
+  (BinaryObjectInfoResponse & { success: false }) |
+  (BinaryObjectInfoResponse & {
+    success: true; // Indicates the operation was successful
+    data: Buffer; // The actual binary data of the object
+  });
+export async function fetchBinaryObjectInfoData(objectId: bigint): Promise<BlobInfoDataResponse> {
+  const info = await fetchBinaryObjectInfo(objectId);
+  if (!info.success) {
+    return info; // Return the error response directly
+  }
+  const data = await downloadBinaryObject(objectId);
+  if (!data.success) {
+    return data; // Return the error response directly
+  }
+  return {
+    ...info,
+    data: data.data, // Attach the downloaded data
+  };
 }
 
 export type NewTextMessageInput = {
