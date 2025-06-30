@@ -194,11 +194,13 @@ function wsBinaryHandler(socket: WebSocket, message: Buffer) {
 
   objctx.mutex.runExclusive(async () => {
     const obj = objctx.bo;
+    // 所有 await 都会打乱函数开始和结束的顺序。
     // 这里的 await 迫使我们在外层还要再加一层 Mutex ，确保 BinaryHandler 保持收到的数据顺序。
     // 不然第一个回调卡在这个 await 的时候，第二个回调会更早插入 appendData 的队列，
     // 然后第一个回调的数据反而在后面。
     await obj.enableAudioConversion(context.clientSampleRate, context.clientChannels);
     await obj.appendDataWithConversion(packet.data);
+    // TODO: check object size and handle large objects
     if (packet.header.isLastFrame) {
       await obj.stopAppending();
       console.log('Received complete BinaryObject:', objctx.bo.toJSON());
@@ -227,7 +229,7 @@ function createNewContext(socket: WebSocket, clientId: bigint): DemoContext {
   });
 
   const helper = new LLMHelper(
-      LLMProvider.OpenRouter, 'openai/gpt-4o',
+      LLMProvider.OpenRouter, 'anthropic/claude-3.5-haiku',
       30, systemPrompt, [
         ttiWrap.tool,
         openImageTool.tool,
@@ -706,9 +708,9 @@ async function finishLastBinaryObject(context: DemoContext) {
     return;
   }
   // Here you can save the BinaryObject to a file or process it further
-  last_obj.saveToFile('./data', `demo_${last_bosid.toString()}`, (fullPath) => {
-    console.log(`Saved BinaryObject to ${fullPath}`);
-  });
+  // last_obj.saveToFile('./data', `demo_${last_bosid.toString()}`, (fullPath) => {
+  //   console.log(`Saved BinaryObject to ${fullPath}`);
+  // });
   // delete after half second.
   // 这是一个临时的解决方案，有时候有的数据包会在 stop 之后才到达。
   // 因为这是音频数据，所以我们假设最后的数据包可以忽略。
@@ -729,8 +731,8 @@ async function handleUserAudio(
     bo: BinaryObject, socket: WebSocket, context: DemoContext) {
   try {
     const duration = await bo.getAudioDuration();
-    if (duration <= 0.3) {
-      // 如果音频时长小于 0.3 秒，认为是无效的音频数据。
+    if (duration <= 0.8) {
+      // 如果音频时长小于 0.8 秒，认为是无效的音频数据。
       // clientPushNotify(socket, '你说话的时间太短了，机器人没能听清楚。');
       console.info('Ignoring short audio data:', duration, 'seconds');
       return;
@@ -1424,8 +1426,8 @@ class LLMTTS {
     console.log(`Received collected chunk: ${chunk}, length: ${chunk.length}`);
     if (chunk.length > 0) {
       this.tts.push(chunk);
-      clientPushAIDelta(this.socket, chunk,
-          this.chatId, this.messageId, this.chunkIndex++);
+      // clientPushAIDelta(this.socket, chunk,
+      //     this.chatId, this.messageId, this.chunkIndex++);
     }
     if (trigger === ChunkCollector.Trigger.End) {
       console.log('TTS chunk collection ended, flushing remaining packets.');
