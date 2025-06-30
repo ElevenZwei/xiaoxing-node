@@ -137,7 +137,9 @@ export class GlbRenderer {
           }, 5000);
           const func = (window as any).func as PageFunctions;
           if (typeof func.setOrbit === 'function') {
-            await func.setOrbit(pitch, yaw);
+            // 这里很重要，yaw + 180 是为了让模型正面朝向相机
+            // 如果不加 180，S3D 生成的模型会背对相机
+            await func.setOrbit(pitch, yaw + 180);
             clearTimeout(timeout);
             resolve();
           } else {
