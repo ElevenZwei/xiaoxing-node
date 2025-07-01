@@ -122,6 +122,7 @@ async function uploadBinaryObjectImpl(input: UploadBinaryObjectImplInput):
   if (name != null && name.length > 0) {
     form.append('name', name);
   }
+  form.append('save_name', saveName);
   form.set('content', new Blob([content], { type: 'application/octet-stream' }), saveName);
   const encoder = new FormDataEncoder(form);
   return axios.post(`${API_URL}/binary/${urlPart}`, Readable.from(encoder.encode()), {
