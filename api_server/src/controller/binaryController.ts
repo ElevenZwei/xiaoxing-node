@@ -167,7 +167,7 @@ function parseUploadArgs(req: Request): UploadArgs | null {
   const fileSize = BigInt(req.body.file_size);
   const name = req.body.name || null; // Optional name
   const description = req.body.description || null; // Optional description
-  const saveName = req.file.originalname;
+  const saveName = req.body.save_name;
   const content = req.file.buffer;
   if (objectId <= 0n || fileType < 0 || fileSize <= 0 || !saveName || !content) {
     return null;
