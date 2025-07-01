@@ -281,7 +281,8 @@ export class LLMHelper {
             { role: 'system', content: this.systemPrompt }
         ];
     const nextMsg: LLMMsg[] =
-        (role === undefined || content === undefined) ? [] : [
+        // 很多 LLM 不支持空消息，所以这里需要检查，把空的过滤掉。
+        (role === undefined || content === undefined || content.length === 0) ? [] : [
             role === LLMRole.Tool
                 ? { role, content, tool_call_id: toolCallId as string }
                 : { role, content }

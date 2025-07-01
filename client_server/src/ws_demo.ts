@@ -891,7 +891,7 @@ function userMessageToLLM(input: UserMessageToLLMParams) {
       context.clearOutdatedTTS();
       if (lastText == null || lastText.length === 0) {
         // AI 没有给出回答。
-        clientPushNotify(socket, 'AI 没有给出回答。');
+        clientPushNotify(socket, 'AI 没有说话。');
         return;
       }
     } catch (err) {
