@@ -21,7 +21,9 @@ export class GlbRenderer {
 
   async spinUp(width: number = 1024, height: number = 1024) {
     if (GlbRenderer.browser === undefined) {
-      GlbRenderer.browser = await firefox.launch({ headless: true });
+      GlbRenderer.browser = await firefox.launch({
+        headless: true,
+      });
     }
     if (this.page === undefined) {
       this.page = await this.createPage(width, height);

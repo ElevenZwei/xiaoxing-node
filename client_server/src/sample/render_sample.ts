@@ -4,10 +4,10 @@ import { GlbRenderer } from '../glb_renderer'
 
 const renderer = new GlbRenderer();
 async function renderModel(modelPath: string, savePrefix: string) {
-  const model = await fs.promises.readFile(modelPath);
   console.log(`✅ [${Date.now()}] Renderer spining up.`);
-  console.log(`✅ [${Date.now()}] Renderer spun up for model: ${modelPath}`);
   await renderer.spinUp();
+  const model = await fs.promises.readFile(modelPath);
+  console.log(`✅ [${Date.now()}] Renderer spun up for model: ${modelPath}`);
   const page = await renderer.createPage(1280, 720);
   await renderer.loadModel(model, page);
   console.log(`✅ [${Date.now()}] Renderer loaded model: ${modelPath}`);
