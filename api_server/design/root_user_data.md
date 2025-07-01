@@ -11,3 +11,9 @@ insert into device_info(device_id, user_id, device_type, device_serial) values
 (1, 1, 0x3001, '<serial>');
 ```
 
+此外还需要一个临时用户，用于不想要登陆的设备。
+这个时候设备处于可以写入，但是无法读取历史记录的状态。
+用户可以输入注册用户的命令，让 LLM 调用对应的工具。
+
+
+
