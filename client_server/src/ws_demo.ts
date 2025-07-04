@@ -522,7 +522,7 @@ async function handleClientChat(socket: WebSocket, json: any) {
         lastMessageIndex: 0, // 初始化消息索引
       };
       console.info('Created new chat session with placeholder chatId:', context.chat.chatId);
-      sendChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
+      clientPushChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
       // clientImageTest(socket);
       return;
     }
@@ -539,11 +539,11 @@ async function handleClientChat(socket: WebSocket, json: any) {
         chatName: openChat.chat_name,
         lastMessageIndex: openChat.last_message_index,
       };
-      sendChatOpen(socket, context.chat, '欢迎回来！请继续聊天。');
+      clientPushChatOpen(socket, context.chat, '欢迎回来！请继续聊天。');
       return;
     } catch (err) {
       console.error('Failed to get user open chat:', err);
-      sendChatOpenFailed(socket, chatId, '无法打开聊天会话，请稍后再试。');
+      clientPushChatOpenFailed(socket, chatId, '无法打开聊天会话，请稍后再试。');
       return;
     }
   } else {
@@ -653,10 +653,10 @@ async function handleClientListen(socket: WebSocket, json: any) {
               chatName: chatInfo.chat_name,
               lastMessageIndex: chatInfo.last_message_index,
             };
-            sendChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
+            clientPushChatOpen(socket, context.chat, '欢迎聊天！请开始新的对话。');
           } catch (err) {
             console.error('Failed to create new chat:', err);
-            sendChatOpenFailed(socket, chatId, '无法创建新的聊天会话，请稍后再试。');
+            clientPushChatOpenFailed(socket, chatId, '无法创建新的聊天会话，请稍后再试。');
           }
         }
       } else {
@@ -925,7 +925,7 @@ async function localSTT(bo: BinaryObject): Promise<null | string> {
 
 // client-server part.
 
-function sendChatOpen(socket: WebSocket, chat: FocusChat, welcome_text: string | undefined) {
+function clientPushChatOpen(socket: WebSocket, chat: FocusChat, welcome_text: string | undefined) {
   const response = {
     type: 'chat',
     state: 'open',
@@ -937,7 +937,7 @@ function sendChatOpen(socket: WebSocket, chat: FocusChat, welcome_text: string |
   socket.send(JSON.stringify(response));
 }
 
-function sendChatOpenFailed(socket: WebSocket, chatId: bigint, message: string) {
+function clientPushChatOpenFailed(socket: WebSocket, chatId: bigint, message: string) {
   socket.send(JSON.stringify({
     type: 'chat',
     state: 'error',
@@ -1077,10 +1077,10 @@ function clientPushAudio(socket: WebSocket, oggPacket: OggPacket) {
 }
 
 function clientPushImageMessage(socket: WebSocket, bosid: bigint) {
-    const info = { type: 'image', bosid: bosid.toString() };
-    // Send the image info to the client
-    console.log('Sending image message with bosid:', bosid.toString());
-    socket.send(JSON.stringify(info));
+  const info = { type: 'image', bosid: bosid.toString() };
+  // Send the image info to the client
+  console.log('Sending image message with bosid:', bosid.toString());
+  socket.send(JSON.stringify(info));
 }
 
 /**
@@ -1115,7 +1115,7 @@ function clientPushImage(socket: WebSocket, bosid: bigint, imageData: Buffer) {
   });
 }
 
-async function clientImageTest(socket: WebSocket) {
+async function clientPushSampleImage(socket: WebSocket) {
   // read an image file and send it to the client
   // Path to your test image
   const imagePath = path.join(__dirname, '../data/media/sample.jpg');
@@ -1162,8 +1162,8 @@ type UploadUserMessageInput = {
   socket: WebSocket;
 };
 // upload user message to server
-function uploadUserMessage(input: UploadUserMessageInput) {
-  (async () => {
+async function uploadUserMessage(input: UploadUserMessageInput): Promise<void> {
+  try {
     const res = await Api.newTextMessage({
         messageId: input.msgId,
         chatId: input.chatId,
@@ -1194,9 +1194,9 @@ function uploadUserMessage(input: UploadUserMessageInput) {
       return;
     }
     console.log('user audio uploaded successfully:', resp);
-  })().catch((err) => {
-    console.error('Failed to upload user message:', err);
-  });
+  } catch (err) {
+    console.error('Failed to upload user message:', catchToString(err));
+  }
 }
 
 type UploadAIMessageInput = {
@@ -1206,8 +1206,8 @@ type UploadAIMessageInput = {
   audio: Buffer | null; // AI 的音频数据
   socket: WebSocket;
 };
-function uploadAIMessage(input: UploadAIMessageInput) {
-  (async () => {
+async function uploadAIMessage(input: UploadAIMessageInput): Promise<void> {
+  try {
     // 这里的 msg.role 是 LLMRole.AI 或者 LLMRole.Tool 或者 LLMRole.System。
     const role = input.msg.role;
     const sentence: string = input.msg.content as string;
@@ -1247,9 +1247,9 @@ function uploadAIMessage(input: UploadAIMessageInput) {
       }
       console.log('AI audio uploaded successfully:', resp);
     }
-  })().catch((err) => {
-    console.error('Failed to upload AI message:', err);
-  });
+  } catch (err) {
+    console.error('Failed to upload AI message:', catchToString(err));
+  }
 }
 
 type UploadToolMessageInput = {
@@ -1258,8 +1258,8 @@ type UploadToolMessageInput = {
   msg: LLMMsg;
   socket: WebSocket;
 }
-function uploadToolMessage(input: UploadToolMessageInput) {
-  (async () => {
+async function uploadToolMessage(input: UploadToolMessageInput): Promise<void> {
+  try {
     const msg = input.msg;
     let senderType: SenderType;
     let content: string;
@@ -1288,9 +1288,9 @@ function uploadToolMessage(input: UploadToolMessageInput) {
     }
     console.log('Tool message uploaded successfully:', res);
     clientPushMessageIndex(input.socket, res);
-  })().catch((err) => {
-    console.error('Failed to upload tool message:', err);
-  });
+  } catch (err) {
+    console.error('Failed to upload tool message:', catchToString(err));
+  }
 }
 
 type UploadMediaMessageInput = {
@@ -1310,27 +1310,27 @@ type UploadMediaMessageInput = {
   mediaData: Buffer;
 });
 
-function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
-  return (async () => {
+async function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
+  try {
     // 如果有媒体数据，直接上传
     if (input.hasMediaData === true) {
-      const res = await Api.uploadBinaryObject({
-          objectId: input.mediaObjectId,
-          saveName: input.saveName,
-          description: input.description,
-           content: input.mediaData,
-          fileType: input.mediaType,
-          name: input.mediaName,
+      const res_up = await Api.uploadBinaryObject({
+        objectId: input.mediaObjectId,
+        saveName: input.saveName,
+        description: input.description,
+        content: input.mediaData,
+        fileType: input.mediaType,
+        name: input.mediaName,
       });
-      if (!res.success) {
-        console.error('Failed to upload media object:', res.error);
-        throw new Error(`Failed to upload media object: ${res.error}`);
+      if (!res_up.success) {
+        console.error('Failed to upload media object:', res_up.error);
+        throw new Error(`Failed to upload media object: ${res_up.error}`);
       }
-      console.log('Media object uploaded successfully:', res);
+      console.log('Media object uploaded successfully:', res_up);
     }
 
     // 上传媒体消息
-    const res = await Api.newMediaMessage({
+    const res_msg = await Api.newMediaMessage({
       messageId: input.msgId,
       chatId: input.chatId,
       senderType: SenderType.AI,
@@ -1339,17 +1339,15 @@ function uploadMediaMessage(input: UploadMediaMessageInput): Promise<void> {
       mediaObjectId: input.mediaObjectId,
       mediaName: input.mediaName,
     });
-    if (!res.success) {
-      console.error('Failed to upload media message:', res.error);
-      throw new Error(`Failed to upload media message: ${res.error}`);
+    if (!res_msg.success) {
+      console.error('Failed to upload media message:', res_msg.error);
+      throw new Error(`Failed to upload media message: ${res_msg.error}`);
     }
-    console.log('Media message uploaded successfully:', res);
-    clientPushMessageIndex(input.socket, res);
-  })().catch(err => {
-    console.error('Failed to upload media message:', err);
-    // 这里可以发送一个错误通知给客户端。
-    // clientPushNotify(input.socket, '上传媒体消息失败，请稍后再试。');
-  });
+    console.log('Media message uploaded successfully:', res_msg);
+    clientPushMessageIndex(input.socket, res_msg);
+  } catch (err) {
+    console.error('Failed to upload media message:', catchToString(err));
+  }
 }
 
 async function resizeImageFit(imageBuffer: Buffer): Promise<Buffer> {
@@ -1391,15 +1389,13 @@ class LLMTTS {
     this.socket = socket;
     this.collector.setValues(5, 1000);
     this.collector.setChunkHook(this.onChunk.bind(this));
-    // TODO: convert Buffer to Opus Audio Frame.
-    // TODO: 响应 Client Abort Audio 的情况，中断推流，但是后台的保存还要继续。
     // TODO: TTS Stream Volcano 里面还有很多调节参数没有设置。
     this.tts.setOnDeltaHook(this.onTTSDelta.bind(this));
     this.reader.setOnPacketHook(this.onOggPacket.bind(this));
-    this.tts.setOnSentenceHook((sentence: TTSSentence, begin: boolean) => {
-      // 这里暂时不推送。
-      // clientPushSentence(socket, sentence.text, begin);
-    });
+    // 这里暂时不推送。
+    // this.tts.setOnSentenceHook((sentence: TTSSentence, begin: boolean) => {
+    //   clientPushSentence(socket, sentence.text, begin);
+    // });
   }
   isEmpty(): boolean { return this.tts.isEmpty() && this.audioQueue.length === 0; }
   setMessageId(msgId: bigint, chatId: bigint) {
@@ -1459,7 +1455,7 @@ class LLMTTS {
     this.packetCache = []; // Clear the cache
     if (this.enableAudioPush) {
       // 推给客户端之前需要延时等到正确的时间点。
-      console.log(`Flushing OggPacket with length ${merged.length} to client.`);
+      // console.log(`Flushing OggPacket with length ${merged.length} to client.`);
       this.pushQueue(merged);
     }
   }
