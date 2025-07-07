@@ -4,7 +4,7 @@ import {
 import { TTIVolcanoHelper, TTIImageSize } from './tti_helper';
 import { S3DHelper, S3DModel } from './s3d_helper';
 import { catchToString, jsonStringify, zSid } from './string';
-import { z } from 'zod';
+import * as z from 'zod/v4';
 import { GlbRenderer } from './glb_renderer';
 
 const ttiPromptDescription = (
