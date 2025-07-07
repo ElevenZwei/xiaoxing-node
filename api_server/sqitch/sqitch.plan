@@ -1,8 +1,8 @@
 %syntax-version=1.0.0
 %project=llm_chat
 
-001_create_basic_table 2025-06-08T08:42:41Z USER <USER@SERVER> # Create fundamental tables.
-002_create_user_table 2025-06-08T08:44:28Z USER <USER@SERVER> # Create user tables.
-003_create_chat_table 2025-06-08T08:44:53Z USER <USER@SERVER> # Create chat tables.
-004_insert_basic_data 2025-06-08T17:03:49Z USER <USER@SERVER> # Insert basic data.
-005_insert_root_user 2025-06-09T12:20:48Z USER <USER@SERVER> # Add root user and device.
+001_create_basic_table 2025-06-08T08:42:41Z anon <anon@localhost> # Create fundamental tables.
+002_create_user_table 2025-06-08T08:44:28Z anon <anon@localhost> # Create user tables.
+003_create_chat_table 2025-06-08T08:44:53Z anon <anon@localhost> # Create chat tables.
+004_insert_basic_data 2025-06-08T17:03:49Z anon <anon@localhost> # Insert basic data.
+005_insert_root_user 2025-06-09T12:20:48Z anon <anon@localhost> # Add root user and device.
