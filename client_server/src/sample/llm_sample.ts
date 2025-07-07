@@ -51,15 +51,19 @@ const weatherTool: LLMTool = {
 const ttiWrap = new TTIToolWrapper();
 ttiWrap.setHook(async (input, output) => {
   const filename = sanitize(input.name || 'image') + '.jpg';
+  if (output.success === false) {
+    console.error(`TTIToolWrapper error: ${output.error}`);
+    return { success: false, error: output.error.message };
+  }
   const data = output.image;
   if (data == null || data.length === 0) {
     console.error("TTIToolWrapper output image is empty or null.");
-    return output;
+    return { success: false, error: "生成的图片数据为空或无效。" };
   }
   const filepath = path.join(__dirname, `../../data/media/${filename}`);
   await fs.promises.mkdir(path.dirname(filepath), { recursive: true });
   await fs.promises.writeFile(filepath, data);
-  return output;
+  return { success: true, text: `生成的图片已保存为 ${filename}。`, imageId: 0n };
 });
 
 const llm = new LLMHelper(

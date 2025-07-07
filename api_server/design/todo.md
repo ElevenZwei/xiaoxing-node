@@ -1,7 +1,8 @@
 # TODO
 
 ## Main Focus
-Open Chat Load Context
+Open Chat Load Context.
+Volume and Screen Brightness adjustment.
 Stop Audio Logic. - ok
 Open Image Tool. - ok
 Convert to 3d model tool - ok
