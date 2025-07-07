@@ -16,13 +16,13 @@ const ttiPromptDescription = (
 + '"A futuristic cityscape at night with neon lights and flying cars, in the style of Blade Runner, digital art"'
 + '"未来感十足的电动汽车概念图，银灰色，停在城市广场上，3D 渲染风"。');
 
-const GenerateImageFromTextInputSchema = z.object({
+const generateImageFromTextInputSchema = z.object({
   prompt: z.string().describe(ttiPromptDescription),
   name: z.string().describe('图像的名称或标题。'),
   shape: z.enum(['square', 'landscape', 'portrait']).describe('生成图片的尺寸类型。'),
 });
 
-type GenerateImageFromTextInput = z.infer<typeof GenerateImageFromTextInputSchema>;
+type GenerateImageFromTextInput = z.infer<typeof generateImageFromTextInputSchema>;
 type GenerateImageFromTextOutput = {
   success: true;
   image: Buffer;  // 生成的图像数据
@@ -76,26 +76,7 @@ const ttiPrompt: LLMToolPrompt = {
   function: {
     name: 'generateImageFromText',
     description: ttiDescription,
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: {
-          type: 'string',
-          description: ttiPromptDescription,
-        },
-        name: {
-          type: 'string',
-          description: '图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。',
-        },
-        shape: {
-          type: 'string',
-          enum: ['square', 'landscape', 'portrait'],
-          description: '生成图片的尺寸类型。'
-            + '可以是 "square"（正方形）、"landscape"（横向）或 "portrait"（纵向）。',
-        },
-      },
-      required: ['prompt', 'name', 'shape'],
-    },
+    parameters: z.toJSONSchema(generateImageFromTextInputSchema),
   },
 };
 
@@ -149,7 +130,7 @@ export class TTIToolWrapper {
 
   private async handleToolCall(args: LLMToolFunctionArgs): Promise<TTIToolWrapper.Output> {
     // check args against schema
-    const parsedArgs = GenerateImageFromTextInputSchema.safeParse(args);
+    const parsedArgs = generateImageFromTextInputSchema.safeParse(args);
     if (parsedArgs.success) {
       const input: GenerateImageFromTextInput = parsedArgs.data;
       return this.generate(input);
@@ -169,6 +150,10 @@ export namespace TTIToolWrapper {
 
 // 设计一个显示图像的工具函数，输入代表图像的数字标志符，工具会返回图片描述，把图片显示在屏幕上。
 //
+const openImageToolInputSchema = z.object({
+  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
+  showInChat: z.boolean().default(true).describe('是否在聊天界面中显示图片。默认为 true，表示显示图片。'),
+});
 const openImageDescription = (
   '打开现有的图片。这个工具接受一个表示图像的数字标识符，还有是否要显示在聊天界面的选项。工具会返回对应图片的描述。'
 );
@@ -177,21 +162,7 @@ const openImagePrompt: LLMToolPrompt = {
   function: {
     name: 'openImage',
     description: openImageDescription,
-    parameters: {
-      type: 'object',
-      properties: {
-        imageId: {
-          type: 'string',
-          description: '从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID 。',
-        },
-        showInChat: {
-          type: 'boolean',
-          description: '是否在聊天界面中显示图片。默认为 true，表示显示图片。',
-          default: true,
-        },
-      },
-      required: ['imageId'],
-    },
+    parameters: z.toJSONSchema(openImageToolInputSchema),
   },
 };
 
@@ -226,7 +197,7 @@ export class OpenImageTool {
 
   private async handleToolCall(args: LLMToolFunctionArgs): Promise<OpenImageTool.Output> {
     // check args against schema
-    const parsedArgs = OpenImageToolInputSchema.safeParse(args);
+    const parsedArgs = openImageToolInputSchema.safeParse(args);
     if (parsedArgs.success) {
       const input: OpenImageTool.Input = parsedArgs.data;
       return this.hook(input);
@@ -237,17 +208,18 @@ export class OpenImageTool {
   }
 };
 
-const OpenImageToolInputSchema = z.object({
-  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
-  showInChat: z.boolean().default(true).describe('是否在聊天界面中显示图片。默认为 true，表示显示图片。'),
-});
 export namespace OpenImageTool {
-  export type Input = z.infer<typeof OpenImageToolInputSchema>;
+  export type Input = z.infer<typeof openImageToolInputSchema>;
   export type Output = { success: true, imageId: bigint, imageDescription: string; } | { success: false, error: string; };
   export type MainHook = (input: Input) => Promise<Output>;
 };
 
 // 设计一个生成 3D 模型的工具函数，输入代表图像的数字标志符，工具会返回引用的图片的描述。
+const generate3DModelInputSchema = z.object({
+  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
+  modelName: z.string().describe('3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。'),
+  modelDescription: z.string().describe('3D 模型的描述信息，可以是对图像内容更细致的形容。这个信息之后可以被读取到。'),
+});
 const generate3DModelDescription = (
   '使用图像生成 3D 模型。这个工具接受一张图片，并根据其生成一个 3D 模型。'
   + '生成的模型是 GLB 格式。可以用于产品外观原型、虚拟现实、游戏开发等场景。'
@@ -260,24 +232,7 @@ const generate3DModelPrompt: LLMToolPrompt = {
   function: {
     name: 'generate3DModel',
     description: generate3DModelDescription,
-    parameters: {
-      type: 'object',
-      properties: {
-        imageId: {
-          type: 'string',
-          description: '从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID 。',
-        },
-        modelName: {
-          type: 'string',
-          description: '3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。',
-        },
-        modelDescription: {
-          type: 'string',
-          description: '3D 模型的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。'
-        },
-      },
-      required: ['imageId', 'modelName', 'modelDescription'],
-    },
+    parameters: z.toJSONSchema(generate3DModelInputSchema),
   },
 };
 
@@ -329,7 +284,7 @@ export class Generate3DModelTool {
 
   private async handleToolCall(args: LLMToolFunctionArgs): Promise<Generate3DModelTool.Output> {
     // check args against schema
-    const parsedInput = Generate3DModelInputSchema.safeParse(args);
+    const parsedInput = generate3DModelInputSchema.safeParse(args);
     if (!parsedInput.success) {
       console.error("Invalid arguments for generate3DModel:", parsedInput.error);
       return { success: false, error: '请提供有效的输入，形如：{"imageId": "123", "modelName": "模型名称", "modelDescription": "模型描述"}' };
@@ -359,13 +314,8 @@ export class Generate3DModelTool {
   }
 }
 
-const Generate3DModelInputSchema = z.object({
-  imageId: zSid.describe('从其他工具中得到的图片数字标识符，可以代表图片的唯一 ID。'),
-  modelName: z.string().describe('3D 模型的名称或标题。可以是任何描述性的文本，例如 "日落山脉" 或 "未来城市"。'),
-  modelDescription: z.string().describe('3D 模型的描述信息，可以是对图像内容更细致的形容。这个信息之后可以被读取到。'),
-});
 export namespace Generate3DModelTool {
-  export type Input = z.infer<typeof Generate3DModelInputSchema>;
+  export type Input = z.infer<typeof generate3DModelInputSchema>;
   export type ImageInput = (
     { success: true, image: Buffer, imageId: bigint, imageDescription?: string } | { success: false, error: string });
   export type InputHook = (input: Input) => Promise<ImageInput>;
@@ -378,6 +328,15 @@ export namespace Generate3DModelTool {
 
 
 // 设计一个渲染 3D 模型的工具函数，输入代表 3D 模型的数字标志符，还有渲染的视角参数，工具会返回渲染的图像。
+const render3DModelInputSchema = z.object({
+  modelId: zSid.describe('从其他工具中得到的 3D 模型数字标识符，可以代表模型的唯一 ID。'),
+  pitch: z.number().describe('渲染视角相对于模型的仰角，范围是 -90 到 90 度。90 度表示从上方俯视，-90 度表示从下方仰视。0 度表示水平视角。'),
+  yaw: z.number().describe('渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从正前方看模型，90 度表示从右侧看，180 度表示从背后看，270 度表示从左侧看。'),
+  imageName: z.string().describe('渲染图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉渲染" 或 "未来城市视角"。'),
+  imageDescription: z.string().describe('渲染图像的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。'),
+  showInChat: z.boolean().default(true).describe('是否在聊天界面中显示渲染图像。默认为 true，表示显示图像。'),
+});
+
 const render3DModelDescription = (
   '使用 3D 模型生成渲染图像。这个工具接受一个 3D 模型的数字标识符、视角参数、以及是否显示在聊天界面中，并根据其生成一张渲染图像。'
   + '输入的模型是 GLB 格式，生成的图像是 JPEG 格式。'
@@ -385,42 +344,13 @@ const render3DModelDescription = (
   + '如果生成失败，工具会在返回中包含错误信息。'
   + '注意：渲染完成之后少说话，避免影响用户对新图片的注意力。'
 );
+
 const render3DModelPrompt: LLMToolPrompt = {
   type: 'function',
   function: {
     name: 'render3DModel',
     description: render3DModelDescription,
-    parameters: {
-      type: 'object',
-      properties: {
-        modelId: {
-          type: 'string',
-          description: '从其他工具中得到的 3D 模型数字标识符，可以代表模型的唯一 ID 。',
-        },
-        pitch: {
-          type: 'number',
-          description: '渲染视角相对于模型的仰角，范围是 -90 到 90 度。90 度表示从上方俯视，-90 度表示从下方仰视。0 度表示水平视角。',
-        },
-        yaw: {
-          type: 'number',
-          description: '渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从正前方看模型，90 度表示从右侧看，180 度表示从背后看，270 度表示从左侧看。',
-        },
-        imageName: {
-          type: 'string',
-          description: '渲染图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉渲染" 或 "未来城市视角"。',
-        },
-        imageDescription: {
-          type: 'string',
-          description: '渲染图像的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。',
-        },
-        showInChat: {
-          type: 'boolean',
-          description: '是否在聊天界面中显示渲染图像。默认为 true，表示显示图像。',
-          default: true,
-        },
-      },
-      required: ['modelId', 'pitch', 'yaw', 'imageName', 'imageDescription'],
-    },
+    parameters: z.toJSONSchema(render3DModelInputSchema),
   },
 };
 
@@ -479,7 +409,7 @@ export class Render3DModelTool {
 
   private async handleToolCall(args: LLMToolFunctionArgs): Promise<Render3DModelTool.Output> {
     // check args against schema
-    const parsedInput = Render3DModelInputSchema.safeParse(args);
+    const parsedInput = render3DModelInputSchema.safeParse(args);
     if (!parsedInput.success) {
       console.error("Invalid arguments for render3DModel:", parsedInput.error);
       return { success: false, error: '请提供有效的输入，形如：{"modelId": "123", "pitch": 30, "yaw": 45, "imageName": "渲染图像", "imageDescription": "图像描述"}' };
@@ -512,17 +442,8 @@ export class Render3DModelTool {
   }
 }
 
-const Render3DModelInputSchema = z.object({
-  modelId: zSid.describe('从其他工具中得到的 3D 模型数字标识符，可以代表模型的唯一 ID。'),
-  pitch: z.number().describe('渲染视角相对于模型的仰角，范围是 -90 到 90 度。90 度表示从上方俯视，-90 度表示从下方仰视。0 度表示水平视角。'),
-  yaw: z.number().describe('渲染视角的偏航角度，范围是 0 到 360 度。0 度表示从正前方看模型，90 度表示从右侧看，180 度表示从背后看，270 度表示从左侧看。'),
-  imageName: z.string().describe('渲染图像的名称或标题。可以是任何描述性的文本，例如 "日落山脉渲染" 或 "未来城市视角"。'),
-  imageDescription: z.string().describe('渲染图像的描述信息，可以是对模型内容更细致的形容。这个信息之后可以被读取到。'),
-  showInChat: z.boolean().default(true).describe('是否在聊天界面中显示渲染图像。默认为 true，表示显示图像。'),
-});
-
 export namespace Render3DModelTool {
-  export type Input = z.infer<typeof Render3DModelInputSchema>;
+  export type Input = z.infer<typeof render3DModelInputSchema>;
   export type ModelInput = (
     { success: true, model: Buffer, name?: string, description?: string } | { success: false, error: string });
   export type InputHook = (input: Input) => Promise<ModelInput>;
