@@ -19,13 +19,13 @@ Type Value Table 有三个字段 value, name, meaning。
 
 这里可以划分一下占用的空间。
 
-1. 0x10     0x1fff  binary object type
+1. 0x10     0x1fff  binary object type  -- deprecated
 2. 0x2000   0x2200  user type
 3. 0x2200   0x23ff  credential type
 4. 0x3000   0x3100  device type
 5. 0x4000   0x4100  chat message sender type
 6. 0x4100   0x4200  chat message aux type
-7. 0x4200   0x4400  chat tool type
+7. 0x4200   0x4400  chat tool type  -- deprecated
 8. 0x5000   0x5100  llm provider type
 9. 0x5100   0x5200  tts provider type
 10. 0x10100  0x10200 audit action type

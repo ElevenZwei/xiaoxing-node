@@ -227,6 +227,8 @@ create trigger trg_chat_message_index
     for each row execute function chat_message_index_trigger();
 
 
+-- 以下部分全部作废，根据新的设计，重新设计了 LLM Tool, Avatar 相关的表格。
+
 -- LLM 工具信息表
 create table llm_tool_info (
     tool_id            bigint primary key,

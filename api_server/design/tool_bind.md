@@ -1,53 +1,92 @@
-# 工具绑定
-这个功能用来控制什么用户可以看到什么样的工具，可以掌握哪些 AI 角色。
-我现在只考虑用户机型和 AI 工具、AI 角色的可见性限制。
+# LLM Tool
+这个文件用来在高层讨论 AI 角色和 AI 工具的应用模型。  
 
-之后还需要一层控制用户级别的 AI 工具、AI 角色的可见性，
-这个在现在的 Share Table 里面有 AI 角色的分享功能。
-
-AI 角色的可见性和默认是两个概念。我们还需要机型层面的默认和用户层面的默认两种。
-表格不要过度设计。
-
-这个是系统配置层面的表格，不是用户操作层面的。这个表格我们就不加 removed at 这样的历史记录了。
-设备可以使用哪些 llm avatar 的表格。
-llm avatar device type bind
-1. bind id (bigint pk)
-2. device type (int fk)
-3. avatar id (bigint fk)
-4. is default (boolean)
-5. created at (tz)
-6. unique (device type) where default is true.
-7. unique (device type, avatar id)
-
-设备可以使用哪些 llm tool 的表格。
-llm tool device type bind
-1. bind id (bigint pk)
-2. device type (int fk)
-3. tool id (bigint fk)
-4. created at (tz)
-5. unique (device type, tool id)
-
-用户操作层面的表格。用户需要一个默认角色的设定。
-llm avatar user default bind
-1. bind id
-2. user id
-3. avatar id
-4. is active
-5. created at
-6. removed at
-7. unique (user id) where active is true
-
-# 工具表格的制定
-现在的工具表格有工具类型编号 -> 工具编号这样一层映射。
+## 工具表格的制定
+现在的工具表格有工具类型编号 (tool type) -> 工具编号 (tool id) 这样 one-to-many 映射。
 我的设想是工具类型编号和工具的代码一一对应。
-而工具编号是相同的代码，
-用了不同的工具初始化参数，和不同的工具 prompt 得到的衍生品。
-这样各种角色就可以用相同的代码执行不同风格的工具。
-这样来看 ddl v1 里面关于 Tool Call 表有很多可以改进。
+One tool type maps to one tool class.
 
-对于 Tool 确实要有一个深度的整理，在各种地方，
-Tool Bind 的方法，Tool Call，以及工具系统和外部 MCP 系统的接入。
+工具编号对应这些代码用了不同的工具初始化参数，和不同的工具 prompt 得到的衍生品。
+One Tool id maps to a tool class instantiated with configuration.
+这样各种角色就可以用相同的代码执行不同风格的工具。
+
+这样来看 ddl v1 里面关于 Tool Call 表有很多可以改进。
+Tool 要有一个深度的整理， Tool Bind 的方法，Tool Call，以及工具系统和外部 MCP 系统的接入。
+
+既然说到外部的 MCP，这些内置的工具也可以视作一个 MCP，一个和 DB 深度绑定的 MCP。
+外部 MCP 因为我们并不知道工具的数量，所以我们只能一整个 MCP 对应一个 Tool Type，然后配置。
+内部 MCP 我们可以给每个工具绑定一个 Tool Type。
+
+Tool Type 根据不同的配置产生 Tool Id。
+我们可以控制哪些 Tool Id 是这个类型的设备或者这个用户可以使用的。
+Tool Id 就是我们可以有的控制粒度。
+
+这个可以使用 (availability) ，和启用 (enable) 有一些差别。因为每个 MCP 都会占用一些上下文，
+所以不能所有的东西全都默认启用。这个启用与否，要按照 LLM Avatar 的设定来判断。
+比如说这个用户的 Default Avatar 会启用一些工具。然后更好的 Avatar 会启用另外一些工具。
+所以这里有一个 Avatar -> Tool Id 的 one-to-many 映射，这代表启用的 Tool 。
+
+这个 Available 和 Enable 的区别需要不同的 Table 记录。
+Enable 是在 LLM Avatar 的角色设定里面绑定的，还有是当前的 Chat 的额外启用 / 停用设置。
+所以 Chat 如果更改了启用或者停用的工具的话，它需要在另一个表格里面增加启用停用工具的操作记录。
+
+Chat 里面修改了 LLM Avatar 的话也一样，我们在另外一个表格里面记录启用停用 Avatar 的操作记录。
+对于一个对话而言，启用停用 LLM Tool 需要一个表格，启用停用 Avatar 需要另一个表格。
+真的是挺复杂的，我想要知道现有的 Chat Tool 是如何管理这些功能的。
+
+### 工具表格的读取合成
+
+为此整理一下作为一个用户可以使用的工具是如何构成的。
+
+#### availability
+用户可能有网页端和设备端操作这样两种情况：
+
+如果是设备端操作，
+根据他使用的设备我们得到一个可用性的表格，这个可用性反映了设备自身的输入输出能力。
+例如廉价的低规格终端无法播放视频，但是高端的设备可以，或者有些设备不需要语音合成。
+
+然后根据他的用户类型，可能有些工具无法使用，需要去除一些工具。  
+对此可以另外搞一个 user group tool availability patch  
+让不同的用户开会员包才能使用对应的工具。  
+不过这段是后话，基本上用不到。
+
+如果是网页端操作，
+我们可以默认网页端而输入输出能力是不受限制的。
+这个时候设备的工具可用性变成，这个用户拥有的所有设备可用的工具 Tool Id 的并集。
+然后根据用户类型对可用性表格进行一些修改。
+
+如上我们得到了用户登陆之后工具可用性的表格。
+这个可用性的表格是和会话无关的。
+
+#### enable
+之后再针对一个具体的会话，计算这个对话里面有哪些工具是启用的。  
+对于新建的对话，我们找到默认的 LLM Avatar ( Device Type + User Id )，得到启用的工具表。  
+对于现有的对话，我们找到这个对话里最后使用的 LLM Avatar，这个要通过合成 Avatar 的变化记录得到，如果有多个 Avatar 同时回应的话，我们应该选择它们的并集。然后再去合成 LLM Tool 的变化记录，得到最终启用的工具表。  
+因为加减法有交换律，所以这个合成的顺序不受限制。  
+如上我们得到了对于一个会话的启用工具表。
+
+#### LLM
+有了上面两个表格之后我们取一个交集，作为当前 Chat 的 LLM 输入。  
+当 enable 的工具比 availability 少的时候不会有问题。  
+但是如果反过来的话，availability 比 enable 少的时候，我们有必要给用户一个消息反馈。  
+
+这种做交集输入 LLM 的做法会带来一个潜在的问题，如果同一个对话在两个不同的终端里面打开，  
+那么这两个终端开启 LLM 会话可用的工具是不一样的。这可能是一个矛盾点。  
+不过现在多个终端打开同一个对话的 Context 刷新功能并没有实现，所以暂且可以无视。  
+
+## 工具限额
+
+为了防止 Token 超量，工具限额是非常重要的一环。  
+限额可以从两个方面展开，  
+一个是用户层面的限额，一个是整个服务器节点，乃至整个系统的限额。  
+用户层面的限额需要在多个服务器之间同步，最好的做法是 Redis 节点。  
+
+用户层面的限额我们可以把它和 Tool Type -> Tool Id 的映射做在一起。  
+不同等级的用户会使用不同的 Tool Id ，然后这个 Tool Id 对应的配置里有限额。  
+然后程序加载的过程里，它会读取
+
+
+## 工具计划
 
 另外我们还说到幻灯片放映的系统，几张图片连在一起可以放映幻灯片的工具设计，这是另外一种消息对象。
-
 
