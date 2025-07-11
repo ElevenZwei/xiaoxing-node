@@ -1,10 +1,12 @@
+import * as z from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+
 import {
   LLMTool, LLMToolPrompt,
   LLMToolFunctionArgs, } from './llm_helper';
 import { TTIVolcanoHelper, TTIImageSize } from './tti_helper';
 import { S3DHelper, S3DModel } from './s3d_helper';
 import { catchToString, jsonStringify, zSid } from './string';
-import * as z from 'zod/v4';
 import { GlbRenderer } from './glb_renderer';
 
 const ttiPromptDescription = (
@@ -76,7 +78,7 @@ const ttiPrompt: LLMToolPrompt = {
   function: {
     name: 'generateImageFromText',
     description: ttiDescription,
-    parameters: z.toJSONSchema(generateImageFromTextInputSchema),
+    parameters: zodToJsonSchema(generateImageFromTextInputSchema),
   },
 };
 
@@ -162,7 +164,7 @@ const openImagePrompt: LLMToolPrompt = {
   function: {
     name: 'openImage',
     description: openImageDescription,
-    parameters: z.toJSONSchema(openImageToolInputSchema),
+    parameters: zodToJsonSchema(openImageToolInputSchema),
   },
 };
 
@@ -232,7 +234,7 @@ const generate3DModelPrompt: LLMToolPrompt = {
   function: {
     name: 'generate3DModel',
     description: generate3DModelDescription,
-    parameters: z.toJSONSchema(generate3DModelInputSchema),
+    parameters: zodToJsonSchema(generate3DModelInputSchema),
   },
 };
 
@@ -350,7 +352,7 @@ const render3DModelPrompt: LLMToolPrompt = {
   function: {
     name: 'render3DModel',
     description: render3DModelDescription,
-    parameters: z.toJSONSchema(render3DModelInputSchema),
+    parameters: zodToJsonSchema(render3DModelInputSchema),
   },
 };
 

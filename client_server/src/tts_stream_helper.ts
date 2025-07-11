@@ -5,7 +5,7 @@ import path from 'path'
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import Denque from 'denque';
-import * as z from 'zod/v4';
+import * as z from 'zod';
 
 const keyPath = path.resolve(__dirname, '../config/key.yaml');
 const keyFile = fs.readFileSync(keyPath, 'utf8');

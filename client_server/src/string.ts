@@ -1,6 +1,6 @@
 // String utilities for client-server communication
 
-import * as z from 'zod/v4';
+import * as z from 'zod';
 import { AxiosError } from 'axios';
 import { APIError } from 'openai';
 
